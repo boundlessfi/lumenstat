@@ -1,8 +1,8 @@
 {
-  "name": "@scf-analytics/example-test-api",
+  "name": "@lumenstat/example-test-api",
   "version": "0.1.0",
   "private": true,
-  "description": "A small API instrumented with OpenTelemetry that dual-exports to SCF Analytics and to the team's own APM (here, the console).",
+  "description": "A small API instrumented with OpenTelemetry that dual-exports to Lumenstat and to the team's own APM (here, the console).",
   "license": "MIT",
   "type": "commonjs",
   "scripts": {

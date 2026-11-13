@@ -1,0 +1,131 @@
+# Lumenstat production stack for one server.
+#
+# No ports are published. The only way in is the `lumenstat` Cloudflare tunnel,
+# which the cloudflared service opens outbound. Run from this folder with the
+# server's env file, e.g.:
+#   docker compose --env-file /srv/lumenstat/.env up -d
+# cloudflared sits behind the `public` profile so the stack can be brought up
+# and the default Umami password replaced before anything is reachable.
+#
+# Pilot note: the tracker (t.) and OTLP (otlp.) hostnames also go through the
+# tunnel in this setup, so Cloudflare sees visitor IPs. The production design
+# serves them on DNS-only hostnames from EU servers instead, so no third-party
+# CDN sees the IPs of visitors to tenant websites.
+
+name: lumenstat
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *restart
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: lumenstat
+      POSTGRES_USER: lumenstat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lumenstat -d lumenstat"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 1g
+    cpus: 1.5
+
+  # Daily salts and rejection counters. Nothing is written to disk, and keys are
+  # never evicted early (a lost salt would split visitor counts mid-day).
+  redis:
+    <<: *restart
+    image: redis:8-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "200mb", "--maxmemory-policy", "noeviction"]
+    mem_limit: 256m
+    cpus: 0.5
+
+  umami:
+    <<: *restart
+    build:
+      context: ../vendor/umami
+    environment:
+      DATABASE_URL: postgresql://lumenstat:${POSTGRES_PASSWORD}@postgres:5432/lumenstat
+      REDIS_URL: redis://redis:6379
+      APP_SECRET: ${UMAMI_APP_SECRET:?set UMAMI_APP_SECRET}
+      # Requests arrive through Cloudflare; this header holds the visitor's IP.
+      # The origin is reachable only through the tunnel, so it cannot be spoofed.
+      CLIENT_IP_HEADER: cf-connecting-ip
+      SCF_COUNTRY_ONLY: "1"
+      SCF_FRONTEND_ONLY: "1"
+      SCF_STRIP_QUERY: "1"
+      SCF_RANDOM_DAILY_SALT: "1"
+      SCF_ENFORCE_ORIGIN: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    mem_limit: 1g
+    cpus: 1.5
+
+  writer:
+    <<: *restart
+    build:
+      context: ../apps/writer
+    environment:
+      DATABASE_URL: postgresql://lumenstat:${POSTGRES_PASSWORD}@postgres:5432/lumenstat
+      SCF_COLLECTOR_SECRET: ${SCF_COLLECTOR_SECRET:?set SCF_COLLECTOR_SECRET}
+      SCF_BOOTSTRAP_OPERATOR_KEY: ${WRITER_OPERATOR_KEY:?set WRITER_OPERATOR_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.5
+
+  collector:
+    <<: *restart
+    image: otel/opentelemetry-collector-contrib:0.164.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ../apps/collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro,z
+    environment:
+      SCF_COLLECTOR_SECRET: ${SCF_COLLECTOR_SECRET}
+      SCF_WRITER_ENDPOINT: http://writer:8080
+    depends_on:
+      - writer
+    mem_limit: 512m
+    cpus: 1
+
+  dashboard:
+    <<: *restart
+    build:
+      context: ../apps/dashboard
+    environment:
+      UMAMI_URL: http://umami:3000
+      WRITER_URL: http://writer:8080
+      WRITER_API_KEY: ${WRITER_OPERATOR_KEY}
+      COLLECTOR_HEALTH_URL: http://collector:13133
+      PUBLIC_UMAMI_URL: https://t.lumenstat.com
+      PUBLIC_COLLECTOR_URL: https://otlp.lumenstat.com
+    depends_on:
+      - umami
+      - writer
+    mem_limit: 512m
+    cpus: 1
+
+  cloudflared:
+    <<: *restart
+    profiles: ["public"]
+    image: cloudflare/cloudflared:2026.10.7
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - dashboard
+      - umami
+      - collector
+    mem_limit: 256m
+    cpus: 0.5
+
+volumes:
+  pgdata:

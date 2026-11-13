@@ -1,5 +1,5 @@
 {
-  "name": "@scf-analytics/writer",
+  "name": "@lumenstat/writer",
   "version": "0.1.0",
   "private": true,
   "description": "Receives filtered OTLP metrics from the SCF collector and stores normalized API metrics in PostgreSQL.",

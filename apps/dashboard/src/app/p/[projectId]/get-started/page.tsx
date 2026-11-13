@@ -131,7 +131,7 @@ export default async function GetStartedPage({ params }: { params: Promise<{ pro
               API (optional)
             </Heading>
             <Text as="p" size="sm">
-              Add a second OpenTelemetry trace exporter next to the one you already have. Your own APM keeps full traces; SCF Analytics keeps
+              Add a second OpenTelemetry trace exporter next to the one you already have. Your own APM keeps full traces; Lumenstat keeps
               only request counts, status codes and timings per route.
             </Text>
             <pre className="snippet">{otel}</pre>

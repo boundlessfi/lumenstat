@@ -10,7 +10,7 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'sw
 const mono = Inconsolata({ subsets: ['latin'], variable: '--font-mono', display: 'swap' });
 
 export const metadata: Metadata = {
-  title: { default: 'SCF Analytics', template: '%s · SCF Analytics' },
+  title: { default: 'Lumenstat', template: '%s · Lumenstat' },
   description: 'Privacy-first web and API analytics for projects building on Stellar.',
   robots: { index: false, follow: false },
 };

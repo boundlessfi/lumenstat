@@ -1,6 +1,6 @@
-# SCF Analytics
+# Lumenstat
 
-Privacy-first web and API analytics for projects building on Stellar, run as a shared service for the Stellar Community Fund. This repo is the MVP for the SCF RFP *Web and API Analytics for Stellar Ecosystem Projects*.
+**Proof of usage for the Stellar ecosystem.** Privacy-first web and API analytics for projects building on Stellar, run as a shared service for the Stellar Community Fund. This repo is the MVP for the SCF RFP *Web and API Analytics for Stellar Ecosystem Projects*.
 
 - **Web:** a patched [Umami](https://github.com/umami-software/umami) v3.5.0 (MIT, PostgreSQL). No cookies, country-only geography, a random daily salt that expires after 48 hours, and only browser events from a site's own domains are counted.
 - **API:** tenants dual-export OpenTelemetry to our collector. Traces and logs are dropped; only request counts, status codes and latency histograms are kept, per normalized route, in PostgreSQL.

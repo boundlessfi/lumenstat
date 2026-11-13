@@ -1,8 +1,8 @@
 {
-  "name": "@scf-analytics/dashboard",
+  "name": "@lumenstat/dashboard",
   "version": "0.1.0",
   "private": true,
-  "description": "SCF Analytics dashboard for project teams and SCF operators, built with the Stellar Design System.",
+  "description": "Lumenstat dashboard for project teams and SCF operators, built with the Stellar Design System.",
   "license": "MIT",
   "scripts": {
     "dev": "next dev -p 3200",

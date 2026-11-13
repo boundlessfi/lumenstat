@@ -1,6 +1,6 @@
 // OpenTelemetry setup, loaded with `node --require` before the app.
 //
-// This is all a tenant adds to send API metrics to SCF Analytics: a second span
+// This is all a tenant adds to send API metrics to Lumenstat: a second span
 // exporter pointed at the SCF collector, with their ingest key. Their existing
 // exporter (the console here, standing in for Datadog, Honeycomb, Grafana...) is
 // untouched, so their own APM keeps the full traces.
@@ -25,7 +25,7 @@ if (!ingestKey) {
 }
 
 const spanProcessors = [
-  // Export 2: SCF Analytics. Only counts and timings survive on the SCF side.
+  // Export 2: Lumenstat. Only counts and timings survive on the SCF side.
   new BatchSpanProcessor({
     exporter: new OTLPTraceExporter({
       url: `${endpoint}/v1/traces`,

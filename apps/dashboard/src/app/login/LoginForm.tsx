@@ -12,7 +12,7 @@ export function LoginForm() {
       <form action={action} className="stack" style={{ gap: 16 }}>
         <div className="stack" style={{ gap: 4 }}>
           <Heading as="h1" size="sm" weight="semi-bold">
-            Sign in to SCF Analytics
+            Sign in to Lumenstat
           </Heading>
           <Text as="p" size="sm" addlClassName="muted">
             Project teams see their own project. SCF operators see every project.
