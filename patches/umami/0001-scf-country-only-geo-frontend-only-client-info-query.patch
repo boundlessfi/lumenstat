@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Collins Ikechukwu <collinschristroa@gmail.com>
+Date: Fri, 13 Nov 2026 08:18:10 +0100
+Subject: [PATCH 1/3] scf: country-only geo, frontend-only client info, query
+ stripping
+
+- SCF_COUNTRY_ONLY: cut IPs to /24 or /48 before the geo lookup; never
+  store region or city.
+- SCF_FRONTEND_ONLY: ignore caller-supplied ip, userAgent, browser, os
+  and device on /api/send, so events reflect the real browser request.
+- SCF_STRIP_QUERY: store utm_* parameters only; drop ad click ids and
+  referrer query strings.
+
+All three are off unless set, so behavior matches upstream by default.
+---
+ src/app/api/send/route.ts   | 23 ++++++++-----
+ src/lib/detect.ts           | 14 +++++---
+ src/lib/scf/privacy.test.ts | 65 +++++++++++++++++++++++++++++++++++++
+ src/lib/scf/privacy.ts      | 46 ++++++++++++++++++++++++++
+ 4 files changed, 135 insertions(+), 13 deletions(-)
+ create mode 100644 src/lib/scf/privacy.test.ts
+ create mode 100644 src/lib/scf/privacy.ts
+
+diff --git a/src/app/api/send/route.ts b/src/app/api/send/route.ts
+index ce82fb3..46b9c01 100644
+--- a/src/app/api/send/route.ts
++++ b/src/app/api/send/route.ts
+@@ -8,6 +8,7 @@ import { truncateString } from '@/lib/format';
+ import { createToken, parseToken } from '@/lib/jwt';
+ import { fetchWebsite } from '@/lib/load';
+ import { parseRequest } from '@/lib/request';
++import { keepUtmOnly, scf } from '@/lib/scf/privacy';
+ import { badRequest, forbidden, json, serverError } from '@/lib/response';
+ import { safeDecodeURI, safeDecodeURIComponent } from '@/lib/url';
+ import {
+@@ -145,7 +146,10 @@ export async function POST(request: Request) {
+ 
+       let urlPath =
+         currentUrl.pathname === '/undefined' ? '' : currentUrl.pathname + currentUrl.hash;
+-      const urlQuery = currentUrl.search.substring(1);
++      // SCF: query strings can carry tokens and ids; keep campaign tags only.
++      const urlQuery = scf.stripQuery()
++        ? keepUtmOnly(currentUrl.searchParams)
++        : currentUrl.search.substring(1);
+       const urlDomain = currentUrl.hostname.replace(/^www\./, '');
+ 
+       let referrerPath: string;
+@@ -159,13 +163,14 @@ export async function POST(request: Request) {
+       const utmContent = currentUrl.searchParams.get('utm_content');
+       const utmTerm = currentUrl.searchParams.get('utm_term');
+ 
+-      // Click IDs
+-      const gclid = currentUrl.searchParams.get('gclid');
+-      const fbclid = currentUrl.searchParams.get('fbclid');
+-      const msclkid = currentUrl.searchParams.get('msclkid');
+-      const ttclid = currentUrl.searchParams.get('ttclid');
+-      const lifatid = currentUrl.searchParams.get('li_fat_id');
+-      const twclid = currentUrl.searchParams.get('twclid');
++      // Click IDs (SCF: never stored when query stripping is on)
++      const clickParams = scf.stripQuery() ? new URLSearchParams() : currentUrl.searchParams;
++      const gclid = clickParams.get('gclid');
++      const fbclid = clickParams.get('fbclid');
++      const msclkid = clickParams.get('msclkid');
++      const ttclid = clickParams.get('ttclid');
++      const lifatid = clickParams.get('li_fat_id');
++      const twclid = clickParams.get('twclid');
+ 
+       if (process.env.REMOVE_TRAILING_SLASH) {
+         // Never strip the root slash, otherwise the home page is saved with an empty path
+@@ -187,7 +192,7 @@ export async function POST(request: Request) {
+         const referrerUrl = new URL(referrer, eventDomain ? `https://${eventDomain}` : base);
+ 
+         referrerPath = referrerUrl.pathname;
+-        referrerQuery = referrerUrl.search.substring(1);
++        referrerQuery = scf.stripQuery() ? undefined : referrerUrl.search.substring(1);
+         referrerDomain = referrerUrl.hostname.replace(/^www\./, '');
+ 
+         // Never save the referrer domain for self-referrals
+diff --git a/src/lib/detect.ts b/src/lib/detect.ts
+index fb36ba2..f67ba48 100644
+--- a/src/lib/detect.ts
++++ b/src/lib/detect.ts
+@@ -5,6 +5,7 @@ import isLocalhost from 'is-localhost-ip';
+ import maxmind from 'maxmind';
+ import { UAParser } from 'ua-parser-js';
+ import { getIpAddress, stripPort } from '@/lib/ip';
++import { scf, truncateIp } from '@/lib/scf/privacy';
+ import { safeDecodeURIComponent } from '@/lib/url';
+ 
+ const MAXMIND = 'maxmind';
+@@ -133,13 +134,18 @@ export async function getLocation(ip: string = '', headers: Headers, skipHeaders
+   }
+ }
+ 
+-export async function getClientInfo(request: Request, payload: Record<string, any>) {
++export async function getClientInfo(request: Request, rawPayload: Record<string, any>) {
++  // SCF: events must come from the visitor's browser, so caller-supplied overrides
++  // (ip, userAgent, browser, os, device) are ignored. Screen size is still read.
++  const payload = scf.frontendOnly() ? { screen: rawPayload?.screen } : rawPayload;
+   const userAgent = payload?.userAgent || request.headers.get('user-agent');
+   const ip = payload?.ip || getIpAddress(request.headers);
+-  const location = await getLocation(ip, request.headers, !!payload?.ip);
++  // SCF: the geo lookup only ever sees the network part of the IP.
++  const lookupIp = scf.countryOnly() ? truncateIp(stripPort(ip)) : ip;
++  const location = await getLocation(lookupIp, request.headers, !!payload?.ip);
+   const country = safeDecodeURIComponent(location?.country);
+-  const region = safeDecodeURIComponent(location?.region);
+-  const city = safeDecodeURIComponent(location?.city);
++  const region = scf.countryOnly() ? undefined : safeDecodeURIComponent(location?.region);
++  const city = scf.countryOnly() ? undefined : safeDecodeURIComponent(location?.city);
+   const browser = payload?.browser ?? browserName(userAgent);
+   const os = payload?.os ?? (detectOS(userAgent) as string);
+   const device = payload?.device ?? getDevice(userAgent, payload?.screen);
+diff --git a/src/lib/scf/privacy.test.ts b/src/lib/scf/privacy.test.ts
+new file mode 100644
+index 0000000..cb883ca
+--- /dev/null
++++ b/src/lib/scf/privacy.test.ts
+@@ -0,0 +1,65 @@
++import { afterEach, describe, expect, test, vi } from 'vitest';
++import { getClientInfo } from '@/lib/detect';
++import { keepUtmOnly, truncateIp } from './privacy';
++
++describe('truncateIp', () => {
++  test('cuts IPv4 to /24', () => {
++    expect(truncateIp('203.0.113.77')).toBe('203.0.113.0');
++    expect(truncateIp('203.0.113.77:51234')).toBe('203.0.113.0');
++  });
++
++  test('cuts IPv6 to /48', () => {
++    expect(truncateIp('2001:db8:abcd:12:34:56:78:9a')).toBe('2001:db8:abcd::');
++    expect(truncateIp('[2001:db8:abcd:12::1]')).toBe('2001:db8:abcd::');
++  });
++
++  test('turns IPv4-mapped IPv6 into a cut IPv4', () => {
++    expect(truncateIp('::ffff:198.51.100.9')).toBe('198.51.100.0');
++  });
++
++  test('rejects junk', () => {
++    expect(truncateIp('')).toBeUndefined();
++    expect(truncateIp('not-an-ip')).toBeUndefined();
++    expect(truncateIp(null)).toBeUndefined();
++  });
++});
++
++describe('keepUtmOnly', () => {
++  test('keeps utm_* and drops everything else', () => {
++    const params = new URLSearchParams('utm_source=x&token=secret&utm_campaign=launch&gclid=abc');
++    expect(keepUtmOnly(params)).toBe('utm_source=x&utm_campaign=launch');
++  });
++});
++
++describe('getClientInfo with SCF flags', () => {
++  afterEach(() => {
++    vi.unstubAllEnvs();
++  });
++
++  const request = () =>
++    new Request('https://analytics.example/api/send', {
++      headers: {
++        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 Safari/605.1.15',
++        'x-forwarded-for': '127.0.0.1',
++      },
++    });
++
++  test('ignores caller-supplied ip and user agent when SCF_FRONTEND_ONLY is set', async () => {
++    vi.stubEnv('SCF_FRONTEND_ONLY', '1');
++    const info = await getClientInfo(request(), { ip: '8.8.8.8', userAgent: 'spoofed-agent', screen: '1440x900' });
++    expect(info.ip).not.toBe('8.8.8.8');
++    expect(info.userAgent).not.toBe('spoofed-agent');
++  });
++
++  test('upstream behavior is unchanged without the flag', async () => {
++    const info = await getClientInfo(request(), { userAgent: 'server-side-agent' });
++    expect(info.userAgent).toBe('server-side-agent');
++  });
++
++  test('never returns region or city when SCF_COUNTRY_ONLY is set', async () => {
++    vi.stubEnv('SCF_COUNTRY_ONLY', '1');
++    const info = await getClientInfo(request(), {});
++    expect(info.region).toBeUndefined();
++    expect(info.city).toBeUndefined();
++  });
++});
+diff --git a/src/lib/scf/privacy.ts b/src/lib/scf/privacy.ts
+new file mode 100644
+index 0000000..30314c6
+--- /dev/null
++++ b/src/lib/scf/privacy.ts
+@@ -0,0 +1,46 @@
++import ipaddr from 'ipaddr.js';
++
++/**
++ * SCF Analytics privacy switches. Each one is off unless its env var is set, so
++ * this fork behaves exactly like upstream Umami when none are configured.
++ */
++export const scf = {
++  /** Store country only. IPs are cut to /24 or /48 before the geo lookup. */
++  countryOnly: () => !!process.env.SCF_COUNTRY_ONLY,
++  /** Ignore caller-supplied ip, userAgent, browser, os and device on /api/send. */
++  frontendOnly: () => !!process.env.SCF_FRONTEND_ONLY,
++  /** Drop query strings except utm_* parameters, and drop ad click ids. */
++  stripQuery: () => !!process.env.SCF_STRIP_QUERY,
++};
++
++/** Cuts an IP to its network part: /24 for IPv4, /48 for IPv6. */
++export function truncateIp(ip: string | undefined | null): string | undefined {
++  if (!ip) return undefined;
++
++  let clean = ip.trim();
++  if (clean.startsWith('[')) clean = clean.slice(1, clean.indexOf(']') === -1 ? undefined : clean.indexOf(']'));
++  if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(clean)) clean = clean.slice(0, clean.lastIndexOf(':'));
++  if (!ipaddr.isValid(clean)) return undefined;
++
++  // Turns IPv4-mapped IPv6 (::ffff:1.2.3.4) back into IPv4.
++  const addr = ipaddr.process(clean);
++
++  if (addr.kind() === 'ipv4') {
++    const octets = (addr as ipaddr.IPv4).octets.slice();
++    octets[3] = 0;
++    return octets.join('.');
++  }
++
++  const parts = (addr as ipaddr.IPv6).parts.slice();
++  for (let i = 3; i < 8; i++) parts[i] = 0;
++  return new ipaddr.IPv6(parts).toString();
++}
++
++/** Keeps utm_* parameters only. Everything else in a query string can carry tokens or ids. */
++export function keepUtmOnly(params: URLSearchParams): string {
++  const kept = new URLSearchParams();
++  for (const [key, value] of params) {
++    if (key.toLowerCase().startsWith('utm_')) kept.append(key, value);
++  }
++  return kept.toString();
++}

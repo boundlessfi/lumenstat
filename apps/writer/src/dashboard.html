@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SCF Analytics · API metrics</title>
+<style>
+  :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #2563eb; --bad: #dc2626; --card: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --accent: #60a5fa; --bad: #f87171; --card: #292524; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 32px 0 8px; }
+  p.lead { color: var(--muted); margin: 0 0 24px; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  input, select, button { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); }
+  input { flex: 1 1 320px; min-width: 0; }
+  button { cursor: pointer; }
+  .table-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  code { font-size: 13px; }
+  .bad { color: var(--bad); }
+  .muted { color: var(--muted); }
+  #status { min-height: 20px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>API metrics</h1>
+  <p class="lead">Normalized endpoint traffic per project. Operator keys see every tenant; tenant keys see only their own.</p>
+
+  <form id="controls">
+    <input id="key" type="password" autocomplete="off" placeholder="Metrics API key" aria-label="Metrics API key">
+    <select id="range" aria-label="Time range">
+      <option value="1h">Last hour</option>
+      <option value="24h" selected>Last 24 hours</option>
+      <option value="7d">Last 7 days</option>
+      <option value="30d">Last 30 days</option>
+    </select>
+    <button type="submit">Load</button>
+  </form>
+  <div id="status" role="status"></div>
+
+  <section id="tenants-section" hidden>
+    <h2>Projects</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Project</th><th class="num">Requests</th><th class="num">5xx rate</th><th class="num">p50 ms</th><th class="num">p95 ms</th><th class="num">Routes</th></tr></thead>
+      <tbody id="tenants"></tbody>
+    </table></div>
+  </section>
+
+  <section id="routes-section" hidden>
+    <h2 id="routes-title">Routes</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Service</th><th>Route</th><th class="num">Requests</th><th class="num">2xx</th><th class="num">4xx</th><th class="num">5xx</th><th class="num">p50 ms</th><th class="num">p95 ms</th><th class="num">p99 ms</th></tr></thead>
+      <tbody id="routes"></tbody>
+    </table></div>
+  </section>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const fmt = n => (n === null || n === undefined ? '–' : Number(n).toLocaleString());
+  const pct = n => (n === null || n === undefined ? '–' : (n * 100).toFixed(2) + '%');
+
+  function cell(text, cls) {
+    const td = document.createElement('td');
+    td.textContent = text;
+    if (cls) td.className = cls;
+    return td;
+  }
+
+  try { $('key').value = sessionStorage.getItem('scf-key') || ''; } catch {}
+
+  async function api(path) {
+    const res = await fetch(path + (path.includes('?') ? '&' : '?') + 'range=' + $('range').value, {
+      headers: { authorization: 'Bearer ' + $('key').value.trim() },
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    return body;
+  }
+
+  async function loadRoutes(tenant) {
+    $('status').textContent = 'Loading routes…';
+    const data = await api('/v1/api-metrics/tenants/' + tenant.tenantId + '/routes');
+    $('routes-title').textContent = 'Routes · ' + data.tenant.name;
+    const body = $('routes');
+    body.replaceChildren();
+    for (const r of data.routes) {
+      const tr = document.createElement('tr');
+      const route = document.createElement('td');
+      const code = document.createElement('code');
+      code.textContent = r.method + ' ' + r.route;
+      route.append(code);
+      tr.append(cell(r.service), route, cell(fmt(r.requests), 'num'), cell(fmt(r.status['2xx']), 'num'),
+        cell(fmt(r.status['4xx']), 'num'), cell(fmt(r.status['5xx']), r.status['5xx'] ? 'num bad' : 'num'),
+        cell(fmt(r.p50Ms), 'num'), cell(fmt(r.p95Ms), 'num'), cell(fmt(r.p99Ms), 'num'));
+      body.append(tr);
+    }
+    if (!data.routes.length) body.append(Object.assign(document.createElement('tr'), { innerHTML: '<td colspan="9" class="muted">No traffic in this range.</td>' }));
+    $('routes-section').hidden = false;
+    $('status').textContent = '';
+  }
+
+  async function load() {
+    try { sessionStorage.setItem('scf-key', $('key').value.trim()); } catch {}
+    $('status').textContent = 'Loading…';
+    $('routes-section').hidden = true;
+    try {
+      const data = await api('/v1/api-metrics/tenants');
+      const body = $('tenants');
+      body.replaceChildren();
+      for (const t of data.tenants) {
+        const tr = document.createElement('tr');
+        tr.className = 'clickable';
+        tr.tabIndex = 0;
+        tr.append(cell(t.name + (t.status === 'active' ? '' : ' (' + t.status + ')')), cell(fmt(t.requests), 'num'),
+          cell(pct(t.errorRate), t.errorRate > 0.01 ? 'num bad' : 'num'), cell(fmt(t.p50Ms), 'num'), cell(fmt(t.p95Ms), 'num'), cell(fmt(t.routes), 'num'));
+        const open = () => loadRoutes(t).catch(e => { $('status').textContent = e.message; });
+        tr.addEventListener('click', open);
+        tr.addEventListener('keydown', e => { if (e.key === 'Enter') open(); });
+        body.append(tr);
+      }
+      $('tenants-section').hidden = false;
+      $('status').textContent = data.scope === 'operator' ? 'Operator view: all projects.' : 'Tenant view: your project only.';
+      if (data.scope === 'tenant' && data.tenants[0]) await loadRoutes(data.tenants[0]);
+    } catch (e) {
+      $('tenants-section').hidden = true;
+      $('status').textContent = e.message;
+    }
+  }
+
+  $('controls').addEventListener('submit', e => { e.preventDefault(); load(); });
+</script>
+</body>
+</html>

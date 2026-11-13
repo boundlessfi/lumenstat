@@ -1,0 +1,108 @@
+name: scf-analytics
+
+# Local stack for SCF Analytics. Copy .env.example to .env (or run
+# scripts/setup-env.sh) before `docker compose up`.
+#
+#   docker compose up -d                      # core: postgres, redis, umami, collector, writer
+#   docker compose --profile examples up -d   # plus a test site and an instrumented test API
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: scf
+      POSTGRES_USER: scf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5440:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scf -d scf"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Holds the daily salts and bot counters. Persistence is off on purpose:
+  # nothing in Redis is ever written to disk.
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6380:6379"
+
+  # Umami v3.5.0 with the patches in patches/umami (see scripts/sync-umami.sh).
+  umami:
+    build:
+      context: ./vendor/umami
+    environment:
+      DATABASE_URL: postgresql://scf:${POSTGRES_PASSWORD}@postgres:5432/scf
+      REDIS_URL: redis://redis:6379
+      APP_SECRET: ${UMAMI_APP_SECRET:?set UMAMI_APP_SECRET in .env}
+      SKIP_LOCATION_HEADERS: "1"
+      SCF_COUNTRY_ONLY: "1"
+      SCF_FRONTEND_ONLY: "1"
+      SCF_STRIP_QUERY: "1"
+      SCF_RANDOM_DAILY_SALT: "1"
+      SCF_ENFORCE_ORIGIN: "1"
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Public OTLP ingest for tenant APIs (4317 gRPC, 4318 HTTP).
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.164.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./apps/collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    environment:
+      SCF_COLLECTOR_SECRET: ${SCF_COLLECTOR_SECRET:?set SCF_COLLECTOR_SECRET in .env}
+      SCF_WRITER_ENDPOINT: ${SCF_WRITER_ENDPOINT:-http://writer:8080}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:13133:13133"
+
+  writer:
+    build:
+      context: ./apps/writer
+    environment:
+      DATABASE_URL: postgresql://scf:${POSTGRES_PASSWORD}@postgres:5432/scf
+      SCF_COLLECTOR_SECRET: ${SCF_COLLECTOR_SECRET}
+      SCF_BOOTSTRAP_OPERATOR_KEY: ${SCF_BOOTSTRAP_OPERATOR_KEY:-}
+    ports:
+      - "127.0.0.1:8090:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  test-site:
+    profiles: [examples]
+    image: nginx:1.29-alpine
+    volumes:
+      - ./examples/test-site:/usr/share/nginx/html:ro
+    ports:
+      - "127.0.0.1:8088:80"
+
+  test-api:
+    profiles: [examples]
+    build:
+      context: ./examples/test-api
+    environment:
+      SCF_OTLP_ENDPOINT: http://collector:4318
+      SCF_INGEST_KEY: ${TEST_API_INGEST_KEY:-}
+      OWN_APM_CONSOLE: "1"
+    ports:
+      - "127.0.0.1:3100:3100"
+      - "127.0.0.1:3101:3101"
+    depends_on:
+      - collector
+
+volumes:
+  pgdata:

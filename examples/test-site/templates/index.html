@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SCF test site · Home</title>
+  <!-- Pinned tracker: the browser refuses to run it if its bytes change. -->
+  <script defer src="{{UMAMI_URL}}/script.js" integrity="{{SRI}}" crossorigin="anonymous" data-website-id="{{WEBSITE_ID}}"></script>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 16px; }
+    nav a { margin-right: 16px; }
+    button { font: inherit; padding: 6px 12px; }
+  </style>
+</head>
+<body>
+  <nav><a href="index.html">Home</a><a href="docs.html?utm_source=nav&amp;session_token=should-not-be-stored">Docs</a></nav>
+  <h1>SCF test site</h1>
+  <p>Every visit here is counted by the local SCF Analytics stack. Open the dashboard at <a href="{{UMAMI_URL}}">{{UMAMI_URL}}</a>.</p>
+  <button data-umami-event="connect-wallet-click">Connect wallet (custom event)</button>
+</body>
+</html>

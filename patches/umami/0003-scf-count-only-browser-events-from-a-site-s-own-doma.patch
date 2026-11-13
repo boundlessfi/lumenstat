@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Collins Ikechukwu <collinschristroa@gmail.com>
+Date: Fri, 13 Nov 2026 08:19:41 +0100
+Subject: [PATCH 3/3] scf: count only browser events from a site's own domains
+
+SCF_ENFORCE_ORIGIN makes /api/send require an Origin header that matches
+the website's domain (or a subdomain; several domains may be listed,
+comma-separated) and the Fetch Metadata headers browsers attach to fetch
+calls. Plain server-side posts usually lack them.
+
+Rejected events get the same reply as bots, and are counted per site,
+reason and day in Redis (scf:rejected:*) for operator review.
+---
+ src/app/api/send/route.ts  | 13 +++++++
+ src/lib/scf/origin.test.ts | 47 +++++++++++++++++++++++
+ src/lib/scf/origin.ts      | 76 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 136 insertions(+)
+ create mode 100644 src/lib/scf/origin.test.ts
+ create mode 100644 src/lib/scf/origin.ts
+
+diff --git a/src/app/api/send/route.ts b/src/app/api/send/route.ts
+index 46b9c01..4f2f2d1 100644
+--- a/src/app/api/send/route.ts
++++ b/src/app/api/send/route.ts
+@@ -8,6 +8,7 @@ import { truncateString } from '@/lib/format';
+ import { createToken, parseToken } from '@/lib/jwt';
+ import { fetchWebsite } from '@/lib/load';
+ import { parseRequest } from '@/lib/request';
++import { checkBrowserOrigin, isOriginCheckEnabled, recordRejection } from '@/lib/scf/origin';
+ import { keepUtmOnly, scf } from '@/lib/scf/privacy';
+ import { badRequest, forbidden, json, serverError } from '@/lib/response';
+ import { safeDecodeURI, safeDecodeURIComponent } from '@/lib/url';
+@@ -85,6 +86,18 @@ export async function POST(request: Request) {
+       }
+     }
+ 
++    // SCF: only count events a browser sent from one of the site's own domains.
++    // Rejections get the same reply as bots, so a script cannot tell why.
++    if (websiteId && isOriginCheckEnabled()) {
++      const website = await fetchWebsite(websiteId);
++      const verdict = checkBrowserOrigin(request.headers, website?.domain);
++
++      if (verdict.ok === false) {
++        await recordRejection(websiteId, verdict.reason);
++        return json({ beep: 'boop' });
++      }
++    }
++
+     // Carried forward in the cache token so repeat identify calls skip identity writes
+     let sessionLinkId = cache?.sessionLinkId;
+ 
+diff --git a/src/lib/scf/origin.test.ts b/src/lib/scf/origin.test.ts
+new file mode 100644
+index 0000000..21e7110
+--- /dev/null
++++ b/src/lib/scf/origin.test.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, test } from 'vitest';
++import { checkBrowserOrigin, hostMatchesDomain } from './origin';
++
++const browser = (origin: string | null, extra: Record<string, string> = {}) => {
++  const headers = new Headers({ 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'cross-site', ...extra });
++  if (origin !== null) headers.set('origin', origin);
++  return headers;
++};
++
++describe('hostMatchesDomain', () => {
++  test('matches the domain and its subdomains', () => {
++    expect(hostMatchesDomain('boundlessfi.xyz', 'boundlessfi.xyz')).toBe(true);
++    expect(hostMatchesDomain('www.boundlessfi.xyz', 'boundlessfi.xyz')).toBe(true);
++    expect(hostMatchesDomain('docs.boundlessfi.xyz', 'https://www.boundlessfi.xyz/')).toBe(true);
++  });
++
++  test('does not match look-alikes', () => {
++    expect(hostMatchesDomain('boundlessfi.xyz.evil.com', 'boundlessfi.xyz')).toBe(false);
++    expect(hostMatchesDomain('notboundlessfi.xyz', 'boundlessfi.xyz')).toBe(false);
++    expect(hostMatchesDomain('boundlessfi.xyz', '')).toBe(false);
++  });
++});
++
++describe('checkBrowserOrigin', () => {
++  test('accepts a browser fetch from a registered domain', () => {
++    expect(checkBrowserOrigin(browser('https://www.boundlessfi.xyz'), 'boundlessfi.xyz')).toEqual({ ok: true });
++  });
++
++  test('accepts any of several comma-separated domains', () => {
++    expect(checkBrowserOrigin(browser('https://builders.example.org'), 'boundlessfi.xyz, example.org')).toEqual({ ok: true });
++  });
++
++  test('rejects a missing or opaque origin', () => {
++    expect(checkBrowserOrigin(browser(null), 'boundlessfi.xyz')).toEqual({ ok: false, reason: 'missing_origin' });
++    expect(checkBrowserOrigin(browser('null'), 'boundlessfi.xyz')).toEqual({ ok: false, reason: 'missing_origin' });
++  });
++
++  test('rejects requests without Fetch Metadata, as a plain server-side post would send', () => {
++    const headers = new Headers({ origin: 'https://boundlessfi.xyz' });
++    expect(checkBrowserOrigin(headers, 'boundlessfi.xyz')).toEqual({ ok: false, reason: 'not_browser_fetch' });
++  });
++
++  test('rejects another site and sites with no domain set', () => {
++    expect(checkBrowserOrigin(browser('https://other.example'), 'boundlessfi.xyz')).toEqual({ ok: false, reason: 'origin_mismatch' });
++    expect(checkBrowserOrigin(browser('https://boundlessfi.xyz'), null)).toEqual({ ok: false, reason: 'no_site_domain' });
++  });
++});
+diff --git a/src/lib/scf/origin.ts b/src/lib/scf/origin.ts
+new file mode 100644
+index 0000000..d603200
+--- /dev/null
++++ b/src/lib/scf/origin.ts
+@@ -0,0 +1,76 @@
++import redis from '@/lib/redis';
++
++/**
++ * SCF: count an event only when a browser sent it from one of the site's own
++ * domains. Browsers attach `Origin` and Fetch Metadata (`Sec-Fetch-*`) headers to
++ * the tracker's fetch call; a script posting from a server usually does not. This
++ * raises the cost of faking traffic; it is one layer, not proof of a human.
++ */
++
++export type RejectReason = 'missing_origin' | 'not_browser_fetch' | 'no_site_domain' | 'origin_mismatch';
++export type OriginVerdict = { ok: true } | { ok: false; reason: RejectReason };
++
++const REJECTION_TTL_SECONDS = 35 * 86400;
++
++export function isOriginCheckEnabled(): boolean {
++  return !!process.env.SCF_ENFORCE_ORIGIN;
++}
++
++function cleanDomain(domain: string): string {
++  return domain
++    .trim()
++    .toLowerCase()
++    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
++    .replace(/\/.*$/, '')
++    .replace(/:\d+$/, '')
++    .replace(/\.$/, '')
++    .replace(/^www\./, '');
++}
++
++/** True when `host` is the site's domain or a subdomain of it. */
++export function hostMatchesDomain(host: string, domain: string): boolean {
++  const h = cleanDomain(host);
++  const d = cleanDomain(domain);
++  return d !== '' && (h === d || h.endsWith(`.${d}`));
++}
++
++/** A site's domain field may list several domains, separated by commas. */
++export function checkBrowserOrigin(headers: Headers, siteDomain: string | null | undefined): OriginVerdict {
++  const origin = headers.get('origin');
++  if (!origin || origin === 'null') return { ok: false, reason: 'missing_origin' };
++
++  let host: string;
++  try {
++    host = new URL(origin).hostname;
++  } catch {
++    return { ok: false, reason: 'missing_origin' };
++  }
++
++  if (!headers.get('sec-fetch-mode') || !headers.get('sec-fetch-site')) {
++    return { ok: false, reason: 'not_browser_fetch' };
++  }
++
++  const domains = (siteDomain ?? '').split(',').map(cleanDomain).filter(Boolean);
++  if (domains.length === 0) return { ok: false, reason: 'no_site_domain' };
++
++  return domains.some(domain => hostMatchesDomain(host, domain))
++    ? { ok: true }
++    : { ok: false, reason: 'origin_mismatch' };
++}
++
++/** Counts rejected events per site, reason and day, so operators can spot inflation attempts. */
++export async function recordRejection(websiteId: string, reason: RejectReason): Promise<void> {
++  // eslint-disable-next-line no-console
++  console.warn(JSON.stringify({ scf: 'event_rejected', websiteId, reason }));
++
++  if (!redis.enabled) return;
++
++  try {
++    const day = new Date().toISOString().slice(0, 10);
++    const key = `scf:rejected:${day}:${websiteId}:${reason}`;
++    const count = await redis.client.incr(key);
++    if (count === 1) await redis.client.expire(key, REJECTION_TTL_SECONDS);
++  } catch {
++    // Counting is best-effort; it must never block collection.
++  }
++}

@@ -1,0 +1,8 @@
+node_modules/
+vendor/
+.env
+*.log
+.DS_Store
+
+# Rendered from examples/test-site/templates by scripts/seed-dev.mjs
+examples/test-site/*.html

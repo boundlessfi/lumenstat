@@ -1,0 +1,28 @@
+{
+  "name": "@scf-analytics/writer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Receives filtered OTLP metrics from the SCF collector and stores normalized API metrics in PostgreSQL.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "tenant:create": "node src/cli/tenant-create.ts",
+    "key:create": "node src/cli/key-create.ts",
+    "key:revoke": "node src/cli/key-revoke.ts"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "17.4.0",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2"
+  }
+}

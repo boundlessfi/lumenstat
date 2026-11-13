@@ -1,0 +1,107 @@
+# SCF Analytics collector (OpenTelemetry Collector contrib).
+#
+# Tenants dual-export OTLP to this endpoint with an `x-scf-ingest-key` header.
+# What happens to their data:
+#   traces  -> server spans become request counts + latency histograms (spanmetrics),
+#              then every span is dropped. No span is stored or forwarded.
+#   logs    -> dropped on arrival.
+#   metrics -> only HTTP server latency histograms survive, converted to delta,
+#              then sent to the writer, which normalizes routes and stores them.
+#
+# Tenant identity: the ingest key header is copied onto the resource *before*
+# spanmetrics aggregates, so spans from different tenants are never merged, and
+# any client-sent value of that attribute is deleted first.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        include_metadata: true
+      http:
+        endpoint: 0.0.0.0:4318
+        include_metadata: true
+
+processors:
+  resource/tenant:
+    attributes:
+      - key: scf.ingest_key
+        action: delete
+      - key: scf.ingest_key
+        from_context: metadata.x-scf-ingest-key
+        action: insert
+
+  filter/http-server-latency:
+    error_mode: ignore
+    metrics:
+      metric:
+        - 'name != "http.server.request.duration" and name != "http.server.duration" and name != "traces.span.metrics.duration"'
+
+  cumulativetodelta: {}
+
+  batch:
+    timeout: 5s
+    send_batch_size: 2048
+
+connectors:
+  spanmetrics:
+    namespace: traces.span.metrics
+    aggregation_temporality: AGGREGATION_TEMPORALITY_DELTA
+    metrics_flush_interval: 15s
+    histogram:
+      unit: ms
+      explicit:
+        buckets: [5ms, 10ms, 25ms, 50ms, 75ms, 100ms, 250ms, 500ms, 750ms, 1s, 2500ms, 5s, 7500ms, 10s]
+    dimensions:
+      - name: http.route
+      - name: url.path
+      - name: http.target
+      - name: http.request.method
+      - name: http.method
+      - name: http.response.status_code
+      - name: http.status_code
+
+exporters:
+  otlphttp/writer:
+    endpoint: ${env:SCF_WRITER_ENDPOINT}
+    encoding: json
+    compression: none
+    headers:
+      x-scf-collector-secret: ${env:SCF_COLLECTOR_SECRET}
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 10m
+    sending_queue:
+      enabled: true
+      queue_size: 5000
+
+  nop: {}
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource/tenant]
+      exporters: [spanmetrics]
+    # Metrics a tenant SDK sends directly: stamp the tenant from the request header.
+    metrics/sdk:
+      receivers: [otlp]
+      processors: [resource/tenant, filter/http-server-latency, cumulativetodelta, batch]
+      exporters: [otlphttp/writer]
+    # Metrics derived from spans already carry the tenant from the traces pipeline.
+    # They have no request headers, so resource/tenant must not run here.
+    metrics/spans:
+      receivers: [spanmetrics]
+      processors: [filter/http-server-latency, batch]
+      exporters: [otlphttp/writer]
+    logs:
+      receivers: [otlp]
+      exporters: [nop]
+  telemetry:
+    logs:
+      level: info

@@ -1,0 +1,188 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Collins Ikechukwu <collinschristroa@gmail.com>
+Date: Fri, 13 Nov 2026 08:19:02 +0100
+Subject: [PATCH 2/3] scf: random daily session salt held only in Redis
+
+SCF_RANDOM_DAILY_SALT replaces the date-derived session salt with a random
+salt per UTC day. It is stored in Redis with a 48-hour TTL (process memory
+when Redis is not configured) and never written to the database. Once it
+expires, stored session ids cannot be linked back to an IP and user agent,
+even by someone holding APP_SECRET.
+
+Applied in resolveIdentifiedSession, so /api/send and error collection agree.
+---
+ src/lib/collection-session.ts  |  8 ++++-
+ src/lib/scf/daily-salt.test.ts | 55 +++++++++++++++++++++++++++++++
+ src/lib/scf/daily-salt.ts      | 60 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 122 insertions(+), 1 deletion(-)
+ create mode 100644 src/lib/scf/daily-salt.test.ts
+ create mode 100644 src/lib/scf/daily-salt.ts
+
+diff --git a/src/lib/collection-session.ts b/src/lib/collection-session.ts
+index 0065858..05586cf 100644
+--- a/src/lib/collection-session.ts
++++ b/src/lib/collection-session.ts
+@@ -1,5 +1,6 @@
+ import { startOfHour } from 'date-fns';
+ import { getSalt, hash, uuid } from './crypto';
++import { getDailySalt } from './scf/daily-salt';
+ 
+ export interface CollectionCache {
+   websiteId: string;
+@@ -35,6 +36,8 @@ export async function resolveIdentifiedSession({
+   websiteId?: string;
+   claimSession: ClaimAnonymousSession;
+ }) {
++  // SCF: when enabled, a random per-day salt replaces the date-derived one.
++  args = { ...args, serverSalt: args.serverSalt ?? (await getDailySalt(args.createdAt)) };
+   const session = resolveCollectionSession(args);
+   const { distinctId, cache } = args;
+ 
+@@ -92,6 +95,7 @@ export function resolveCollectionSession({
+   createdAt,
+   cache,
+   historical = false,
++  serverSalt,
+ }: {
+   sourceId: string;
+   ip: string;
+@@ -101,9 +105,11 @@ export function resolveCollectionSession({
+   createdAt: Date;
+   cache?: CollectionCache | null;
+   historical?: boolean;
++  /** SCF: overrides the date-derived salt (see lib/scf/daily-salt). */
++  serverSalt?: string;
+ }) {
+   const now = Math.floor(Date.now() / 1000);
+-  const baseSalt = getSalt(process.env.SALT_ROTATION, createdAt);
++  const baseSalt = serverSalt ?? getSalt(process.env.SALT_ROTATION, createdAt);
+   // A client salt is mixed into the server salt, never a replacement for it, so
+   // it can only split sessions further. Ignored unless ENABLE_CLIENT_SALT is set.
+   const sessionSalt = process.env.ENABLE_CLIENT_SALT && salt ? hash(baseSalt, salt) : baseSalt;
+diff --git a/src/lib/scf/daily-salt.test.ts b/src/lib/scf/daily-salt.test.ts
+new file mode 100644
+index 0000000..2063566
+--- /dev/null
++++ b/src/lib/scf/daily-salt.test.ts
+@@ -0,0 +1,55 @@
++import { afterEach, describe, expect, test, vi } from 'vitest';
++import { resolveCollectionSession, resolveIdentifiedSession } from '@/lib/collection-session';
++import { getDailySalt } from './daily-salt';
++
++process.env.APP_SECRET ??= 'test-app-secret';
++
++const visitor = {
++  sourceId: '6a1c1e0e-0000-4000-8000-000000000001',
++  ip: '203.0.113.77',
++  userAgent: 'Mozilla/5.0',
++};
++
++describe('getDailySalt (no Redis)', () => {
++  afterEach(() => {
++    vi.unstubAllEnvs();
++  });
++
++  test('is off unless SCF_RANDOM_DAILY_SALT is set', async () => {
++    expect(await getDailySalt(new Date())).toBeUndefined();
++  });
++
++  test('is stable within a UTC day and different across days', async () => {
++    vi.stubEnv('SCF_RANDOM_DAILY_SALT', '1');
++    const morning = await getDailySalt(new Date('2026-11-13T01:00:00Z'));
++    const evening = await getDailySalt(new Date('2026-11-13T23:00:00Z'));
++    const nextDay = await getDailySalt(new Date('2026-11-14T01:00:00Z'));
++    expect(morning).toMatch(/^[0-9a-f]{64}$/);
++    expect(evening).toBe(morning);
++    expect(nextDay).not.toBe(morning);
++  });
++
++  test('is random, not derived from the date or the app secret', async () => {
++    vi.stubEnv('SCF_RANDOM_DAILY_SALT', '1');
++    const salt = await getDailySalt(new Date('2026-11-15T12:00:00Z'));
++    const recomputed = resolveCollectionSession({ ...visitor, createdAt: new Date('2026-11-15T12:00:00Z') });
++    const withSalt = resolveCollectionSession({ ...visitor, createdAt: new Date('2026-11-15T12:00:00Z'), serverSalt: salt });
++    // Someone holding only the app secret computes the upstream id, which no longer matches.
++    expect(withSalt.sessionId).not.toBe(recomputed.sessionId);
++  });
++});
++
++describe('resolveIdentifiedSession with SCF_RANDOM_DAILY_SALT', () => {
++  afterEach(() => {
++    vi.unstubAllEnvs();
++  });
++
++  test('uses the same session for the same visitor on the same day', async () => {
++    vi.stubEnv('SCF_RANDOM_DAILY_SALT', '1');
++    const claimSession = vi.fn(async () => false);
++    const createdAt = new Date('2026-11-16T10:00:00Z');
++    const a = await resolveIdentifiedSession({ ...visitor, createdAt, claimSession });
++    const b = await resolveIdentifiedSession({ ...visitor, createdAt: new Date('2026-11-16T18:00:00Z'), claimSession });
++    expect(a.sessionId).toBe(b.sessionId);
++  });
++});
+diff --git a/src/lib/scf/daily-salt.ts b/src/lib/scf/daily-salt.ts
+new file mode 100644
+index 0000000..ec1b9c8
+--- /dev/null
++++ b/src/lib/scf/daily-salt.ts
+@@ -0,0 +1,60 @@
++import { randomBytes } from 'node:crypto';
++import redis from '@/lib/redis';
++
++/**
++ * SCF: a random session salt per UTC day, replacing Umami's date-derived salt.
++ *
++ * Upstream derives the salt from the app secret and the date, so anyone holding
++ * the secret can recompute a visitor hash from a known IP and user agent. Here
++ * the salt is random, lives only in Redis (or process memory) and expires after
++ * 48 hours. Once it is gone, a stored session id can no longer be linked to a
++ * person, by us or anyone else.
++ */
++
++const TTL_SECONDS = 48 * 3600;
++const memory = new Map<string, { salt: string; expiresAt: number }>();
++
++export function isRandomDailySaltEnabled(): boolean {
++  return !!process.env.SCF_RANDOM_DAILY_SALT;
++}
++
++function dayKey(date: Date): string {
++  return date.toISOString().slice(0, 10);
++}
++
++function fromMemory(day: string): string {
++  const now = Date.now();
++  for (const [key, entry] of memory) {
++    if (entry.expiresAt <= now) memory.delete(key);
++  }
++  let entry = memory.get(day);
++  if (!entry) {
++    entry = { salt: randomBytes(32).toString('hex'), expiresAt: now + TTL_SECONDS * 1000 };
++    memory.set(day, entry);
++  }
++  return entry.salt;
++}
++
++/** The salt for the day `createdAt` falls on, or undefined when the feature is off. */
++export async function getDailySalt(createdAt: Date): Promise<string | undefined> {
++  if (!isRandomDailySaltEnabled()) return undefined;
++
++  const day = dayKey(createdAt);
++
++  // Without Redis each instance keeps its own salt, which is only correct for a
++  // single instance. Production runs with REDIS_URL so all instances agree.
++  if (!redis.enabled) return fromMemory(day);
++
++  await redis.client.connect();
++  const client = redis.client.client;
++  const key = `scf:salt:${day}`;
++
++  // First writer wins; every instance then reads the same value.
++  await client.set(key, randomBytes(32).toString('hex'), {
++    condition: 'NX',
++    expiration: { type: 'EX', value: TTL_SECONDS },
++  });
++  const salt = await client.get(key);
++
++  return typeof salt === 'string' ? salt : fromMemory(day);
++}
