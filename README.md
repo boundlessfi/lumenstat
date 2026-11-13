@@ -15,6 +15,7 @@ Privacy-first web and API analytics for projects building on Stellar, run as a s
 | `collector` | OpenTelemetry Collector: tenant stamping, spanmetrics, drops traces and logs | 4317, 4318 |
 | `writer` | Stores API metrics, serves the metrics API and the API dashboard (`apps/writer`) | 8090 |
 | `test-site`, `test-api` | Examples (`--profile examples`): a tracked site and an instrumented API | 8088, 3100, 3101 |
+| `dashboard` | The UI project teams and SCF operators use, built with the Stellar Design System (`apps/dashboard`, runs on the host for now) | 3200 |
 
 ## Run it locally
 
@@ -92,11 +93,29 @@ More than 500 routes per service fold into `{other}`. Latency is stored as count
 
 Metrics API (Bearer read key): `GET /v1/api-metrics/tenants` and `GET /v1/api-metrics/tenants/:id/routes`, with `range=1h|24h|7d|30d` or `from`/`to`. Operator keys see every tenant; tenant keys see only their own. Keys: `npm run key:create -- --label <who> [--tenant <id>] [--days <n>]`, `npm run key:revoke -- <id>` in `apps/writer`.
 
+## Dashboard
+
+`apps/dashboard` is a Next.js app built with the [Stellar Design System](https://github.com/stellar/stellar-design-system) (`@stellar/design-system` 4.0.2). Umami's own UI stays available for admin work, but project teams and SCF operators use this one.
+
+- **Who is who:** sign-in uses Umami accounts. A project is an Umami team. Members see their team's project; Umami admins are SCF operators and also get the operator screens. Identity is checked with Umami on every request; the session cookie holds only the Umami token.
+- **Website data** is read with the viewer's own Umami token, so Umami enforces which sites they can see.
+- **API data** is read with the dashboard's operator key and filtered on the server to the API tenant linked to the project (`npm run tenant:link -- <tenant id> <team id>` in `apps/writer`).
+- **Screens:** Overview, Website, API, Setup (snippet with SRI hash, live "is data arriving" check), Settings; and for operators All projects, Compare, Enrollment, Keys and health.
+
+```bash
+cd apps/dashboard
+cp .env.example .env.local     # WRITER_API_KEY: npm run key:create -- --label dashboard (in apps/writer)
+npm ci && npm run build && npm start   # http://localhost:3200
+```
+
+Verified locally on 13 Nov 2026: an admin sees every project and the operator screens; a team member lands on their own project, and gets a 404 for operator pages and for another team's project.
+
 ## Tests
 
 ```bash
 cd apps/writer && npm test                                   # normalization, histograms, OTLP parsing, tenant mapping
 cd vendor/umami && pnpm vitest run src/lib/scf               # the Umami patches
+cd apps/dashboard && npm run build                           # type checks every page
 ```
 
 ## Not in this MVP yet
@@ -107,8 +126,9 @@ Tracked against the RFP milestones:
 - Ad-blocker-safe script and endpoint names (`TRACKER_SCRIPT_NAME`, `COLLECT_API_ENDPOINT` need build-time wiring in the image).
 - Flagged-but-stored events, proof-of-work, per-IP fingerprint counting and data-center ranges (only the origin and fetch-metadata layer is in).
 - Multiple domains per site (Umami's domain field accepts one).
-- SCF operator role and global web dashboard inside Umami; tenant enrollment flow and approval mode.
-- API metric rollups (hourly, daily) and retention jobs; the API dashboard inside Umami.
+- Dashboard: self-service sign-up and enrollment approval, issuing and revoking keys from the UI, CSV export and deletion, API trend charts, rejected-traffic counts, and a Docker image for the dashboard.
+- Aggregated queries for the operator screens (today they call Umami once per project and site).
+- API metric rollups (hourly, daily) and retention jobs.
 - Edge authentication of ingest keys at the collector (the writer drops unknown keys today), NATS buffer, OpenTofu and Ansible, monitoring, backups and runbooks.
 
 ## License

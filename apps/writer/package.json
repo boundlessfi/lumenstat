@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "tenant:create": "node src/cli/tenant-create.ts",
     "key:create": "node src/cli/key-create.ts",
-    "key:revoke": "node src/cli/key-revoke.ts"
+    "key:revoke": "node src/cli/key-revoke.ts",
+    "tenant:link": "node src/cli/tenant-link.ts"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "17.4.0",

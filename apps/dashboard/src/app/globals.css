@@ -1,0 +1,152 @@
+/* Layout glue around the Stellar Design System. Colors and type come from SDS tokens. */
+
+body {
+  margin: 0;
+  --sds-ff-base: var(--font-inter), "Inter", sans-serif;
+  --sds-ff-heading: var(--font-inter), "Inter", sans-serif;
+  --sds-ff-monospace: var(--font-mono), "Inconsolata", monospace;
+  background: var(--sds-clr-gray-01);
+  color: var(--sds-clr-gray-12);
+}
+
+.shell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.shell-nav {
+  flex: 1 1 200px;
+  max-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 24px 12px;
+  box-sizing: border-box;
+}
+
+.shell-nav-label {
+  padding: 0 12px 10px;
+  color: var(--sds-clr-gray-11);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.shell-nav a {
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--sds-clr-gray-11);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.shell-nav a:hover {
+  background: var(--sds-clr-gray-03);
+  color: var(--sds-clr-gray-12);
+}
+
+.shell-nav a[aria-current="page"] {
+  background: var(--sds-clr-lilac-03);
+  color: var(--sds-clr-lilac-11);
+  font-weight: 600;
+}
+
+.shell-nav hr {
+  border: 0;
+  border-top: 1px solid var(--sds-clr-gray-06);
+  margin: 12px;
+}
+
+.shell-main {
+  flex: 999 1 560px;
+  min-width: 0;
+  padding: 24px 32px 64px;
+  box-sizing: border-box;
+}
+
+.page {
+  max-width: 1120px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grid-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+
+.section-title {
+  margin: 0;
+  color: var(--sds-clr-gray-11);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.muted { color: var(--sds-clr-gray-11); }
+.mono { font-family: var(--sds-ff-monospace); }
+.truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: center;
+}
+
+.bar-track {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sds-clr-gray-03);
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--sds-clr-lilac-09);
+}
+
+pre.snippet {
+  margin: 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--sds-clr-gray-03);
+  color: var(--sds-clr-gray-12);
+  font-family: var(--sds-ff-monospace);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.chart { width: 100%; height: auto; display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--sds-clr-gray-11); }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: var(--swatch); }
+
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.error-text { color: var(--sds-clr-red-11); font-weight: 600; }
+
+.center-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.center-page > * { width: 100%; max-width: 420px; }

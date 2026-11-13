@@ -6,3 +6,8 @@ vendor/
 
 # Rendered from examples/test-site/templates by scripts/seed-dev.mjs
 examples/test-site/*.html
+
+# Next.js
+.next/
+*.tsbuildinfo
+.env*.local
