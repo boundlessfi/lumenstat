@@ -1,6 +1,6 @@
 name: scf-analytics
 
-# Local stack for SCF Analytics. Copy .env.example to .env (or run
+# Local stack for Lumenstat. Copy .env.example to .env (or run
 # scripts/setup-env.sh) before `docker compose up`.
 #
 #   docker compose up -d                      # core: postgres, redis, umami, collector, writer

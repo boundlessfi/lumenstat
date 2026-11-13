@@ -1,4 +1,4 @@
-# SCF Analytics collector (OpenTelemetry Collector contrib).
+# Lumenstat collector (OpenTelemetry Collector contrib).
 #
 # Tenants dual-export OTLP to this endpoint with an `x-scf-ingest-key` header.
 # What happens to their data:

@@ -3,7 +3,7 @@ import { cookies } from 'next/headers';
 
 // The cookie holds only the viewer's Umami token. Who the viewer is (admin or
 // not, which teams) is asked of Umami on every request, never read from here.
-const COOKIE = 'scf_session';
+const COOKIE = 'lumenstat_session';
 const TWELVE_HOURS = 12 * 3600;
 
 export async function getSessionToken(): Promise<string | null> {

@@ -35,8 +35,8 @@ export function AppShell({
   return (
     <>
       <Layout.Header
-        projectId="scf-analytics"
-        projectTitle="SCF Analytics"
+        projectId="lumenstat"
+        projectTitle="Lumenstat"
         projectLink="/"
         hasThemeSwitch
         onSignOut={() => {
