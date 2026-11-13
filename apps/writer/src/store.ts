@@ -21,6 +21,8 @@ export interface TenantStat {
   tenantId: string;
   name: string;
   status: string;
+  /** The Umami team this tenant belongs to, so the dashboard can match web and API data. */
+  umamiTeamId: string | null;
   services: number;
   routes: number;
   requests: number;
@@ -191,7 +193,7 @@ export class Store {
          select s.* from scoped s join pref p using (tenant_id, service_name)
           where s.source = case when p.has_metrics then 'metrics' else 'spans' end
        )
-       select t.tenant_id, t.name, t.status,
+       select t.tenant_id, t.name, t.status, t.umami_team_id,
               count(distinct c.service_name)::int as services,
               count(distinct (c.service_name, c.route))::int as routes,
               coalesce(sum(c.request_count), 0)::bigint as requests,
@@ -199,7 +201,7 @@ export class Store {
               scf_api.array_sum(c.bucket_counts) as bucket_counts
          from scf_api.tenant t left join chosen c on c.tenant_id = t.tenant_id
         where ($3::uuid is null or t.tenant_id = $3)
-        group by t.tenant_id, t.name, t.status
+        group by t.tenant_id, t.name, t.status, t.umami_team_id
         order by requests desc, t.name`,
       [from, to, onlyTenantId],
     );
@@ -211,6 +213,7 @@ export class Store {
         tenantId: r.tenant_id,
         name: r.name,
         status: r.status,
+        umamiTeamId: r.umami_team_id ?? null,
         services: r.services,
         routes: r.routes,
         requests,
@@ -270,9 +273,25 @@ export class Store {
     });
   }
 
-  async tenantExists(tenantId: string): Promise<{ tenantId: string; name: string; status: string } | null> {
-    const { rows } = await this.pool.query('select tenant_id, name, status from scf_api.tenant where tenant_id = $1', [tenantId]);
+  async tenantExists(
+    tenantId: string,
+  ): Promise<{ tenantId: string; name: string; status: string; umamiTeamId: string | null } | null> {
+    const { rows } = await this.pool.query(
+      'select tenant_id, name, status, umami_team_id from scf_api.tenant where tenant_id = $1',
+      [tenantId],
+    );
     const row = rows[0];
-    return row ? { tenantId: row.tenant_id, name: row.name, status: row.status } : null;
+    return row
+      ? { tenantId: row.tenant_id, name: row.name, status: row.status, umamiTeamId: row.umami_team_id ?? null }
+      : null;
+  }
+
+  /** Links an API tenant to the Umami team that owns the project's websites. */
+  async linkUmamiTeam(tenantId: string, umamiTeamId: string | null): Promise<boolean> {
+    const { rowCount } = await this.pool.query('update scf_api.tenant set umami_team_id = $2 where tenant_id = $1', [
+      tenantId,
+      umamiTeamId,
+    ]);
+    return (rowCount ?? 0) > 0;
   }
 }
