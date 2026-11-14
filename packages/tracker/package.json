@@ -1,0 +1,42 @@
+{
+  "name": "@lumenstat/tracker",
+  "version": "1.0.0",
+  "description": "Cookieless, privacy-first web analytics tracker for Stellar ecosystem projects (Lumenstat). Umami-compatible.",
+  "license": "MIT",
+  "homepage": "https://lumenstat.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/boundlessfi/lumenstat.git",
+    "directory": "packages/tracker"
+  },
+  "keywords": [
+    "analytics",
+    "stellar",
+    "privacy",
+    "umami",
+    "cookieless"
+  ],
+  "main": "dist/l.js",
+  "exports": {
+    ".": "./dist/l.js",
+    "./l.js": "./dist/l.js",
+    "./releases.json": "./releases.json"
+  },
+  "files": [
+    "dist/l.js",
+    "releases.json",
+    "README.md"
+  ],
+  "sideEffects": true,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "lumenstat": {
+    "collectHost": "https://t.lumenstat.com",
+    "collectEndpoint": "/e"
+  },
+  "scripts": {
+    "prepack": "node -e \"const v=require('./package.json').version;require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('releases/'+v+'.js','dist/l.js')\""
+  }
+}

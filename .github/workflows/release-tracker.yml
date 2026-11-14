@@ -1,0 +1,66 @@
+# Publishes a tracker release: push a tag `tracker-v<version>` matching
+# packages/tracker/package.json. The release notes carry the URL and SRI hash;
+# the npm package is published with provenance (npm trusted publishing).
+name: Release tracker
+
+on:
+  push:
+    tags: ['tracker-v*']
+
+permissions:
+  contents: write # create the GitHub release
+  id-token: write # npm provenance and trusted publishing
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Tag matches the package version
+        id: meta
+        run: |
+          version="$(node -p "require('./packages/tracker/package.json').version")"
+          [ "$GITHUB_REF_NAME" = "tracker-v$version" ] || { echo "Tag $GITHUB_REF_NAME does not match version $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Rebuild from source and compare byte for byte
+        run: |
+          git config --global user.name ci && git config --global user.email ci@localhost
+          scripts/sync-umami.sh
+          (cd vendor/umami && npx -y pnpm@12.3.4 install --frozen-lockfile --ignore-scripts)
+          node scripts/build-tracker.mjs --check
+
+      - name: Release notes
+        run: |
+          node -e '
+            const v = process.argv[1];
+            const r = require("./packages/tracker/releases.json")[v];
+            const notes = [
+              `Tracker ${v}: ${r.bytes} bytes, built from Umami ${r.umami} plus the patches in patches/umami.`,
+              "",
+              "```html",
+              `<script defer src="${r.url}" integrity="${r.integrity}" crossorigin="anonymous" data-website-id="YOUR-WEBSITE-ID"></script>`,
+              "```",
+              "",
+              `URL: ${r.url}`,
+              `Integrity: \`${r.integrity}\``,
+              "",
+              "Check it yourself: `curl -s " + r.url + " | openssl dgst -sha384 -binary | openssl base64 -A` must print the hash after `sha384-`.",
+            ].join("\n");
+            require("fs").writeFileSync("release-notes.md", notes);
+          ' "${{ steps.meta.outputs.version }}"
+
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          name: Tracker ${{ steps.meta.outputs.version }}
+          body_path: release-notes.md
+          files: packages/tracker/releases/${{ steps.meta.outputs.version }}.js
+
+      - name: Publish to npm with provenance
+        working-directory: packages/tracker
+        run: npm publish --provenance --access public
