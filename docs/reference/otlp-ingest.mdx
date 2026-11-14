@@ -1,0 +1,166 @@
+---
+title: "OTLP ingest"
+description: "Endpoint, protocol, header, accepted metric series, spanmetrics dimensions and histogram buckets for otlp.lumenstat.com."
+icon: "inbox"
+---
+
+`https://otlp.lumenstat.com` is an OpenTelemetry Collector that accepts OTLP over HTTP. It turns server spans into per-route request counts and latency histograms, keeps three HTTP latency metric series, and drops everything else. Everything on this page is read from [`apps/collector/config.yaml`](https://github.com/boundlessfi/lumenstat/blob/main/apps/collector/config.yaml) and the writer in [`apps/writer/src`](https://github.com/boundlessfi/lumenstat/tree/main/apps/writer/src).
+
+## Endpoint
+
+| Path | Method | What happens |
+| --- | --- | --- |
+| `/v1/traces` | `POST` | Spans go through spanmetrics and are then dropped. This is the recommended path. |
+| `/v1/metrics` | `POST` | Only the three [accepted series](#accepted-metric-series) are kept. Every other metric is dropped. |
+| `/v1/logs` | `POST` | Accepted and dropped on arrival. |
+
+Any other path on `otlp.lumenstat.com` returns 404 at the edge.
+
+## Protocol
+
+| Property | Value |
+| --- | --- |
+| Transport | HTTPS on port 443 |
+| Protocol | OTLP/HTTP |
+| Body encoding | Protobuf (`application/x-protobuf`) or JSON (`application/json`) |
+| Compression | `gzip` accepted |
+| gRPC | Not exposed. The collector listens for gRPC on port 4317 inside the stack, but the public route forwards only the three HTTP paths above to its HTTP port, 4318. |
+
+In the current pilot `otlp.lumenstat.com` is served through Cloudflare, which sees requests in transit. The production design serves it directly from EU servers. See [Privacy](/trust/privacy).
+
+## Header
+
+<ParamField header="x-scf-ingest-key" type="string" required>
+  The project's ingest key from the **Setup** page: `scf_ingest_` followed by 32 URL-safe characters (24 random bytes, base64url). Lumenstat stores only its SHA-256 hash.
+</ParamField>
+
+What the collector and writer do with it:
+
+1. The collector's `resource/tenant` processor deletes any `scf.ingest_key` resource attribute the client sent, then inserts the header value as `scf.ingest_key`. The `otlp` receiver runs with `include_metadata: true` on both protocols, which makes the request header available to the processor.
+2. This happens before spanmetrics aggregates, so spans from different keys never share a series.
+3. The writer hashes the key and looks it up. The key must not be revoked and its tenant must be `active`. Any tenant field in the payload, such as a `tenant.id` resource attribute, is ignored.
+4. Lookups are cached for 60 seconds, so a key revoked in the database can keep working for up to a minute.
+
+### Requests without a valid key
+
+The collector does not check the key. A request with a missing, unknown or revoked key gets the same success response as a valid one. Its spans are aggregated like any other, and the writer then drops every resulting data point with the reason `unknown_ingest_key`. Nothing is stored and the sender sees no error. Use **Is data arriving?** on Setup to confirm a key works.
+
+<Note>
+  Checking ingest keys at the edge, instead of only in the writer, is planned for Milestone 2. See the [roadmap](/project/roadmap).
+</Note>
+
+## Accepted metric series
+
+The collector's `filter/http-server-latency` processor and the writer's `ACCEPTED_METRICS` keep these histogram series and nothing else.
+
+| Series | Arrives through | Default unit | Notes |
+| --- | --- | --- | --- |
+| `traces.span.metrics.duration` | Built by the collector from spans sent to `/v1/traces` | `ms` | Only points with `span.kind` = `SPAN_KIND_SERVER` are stored. |
+| `http.server.request.duration` | An SDK metric exporter sending to `/v1/metrics` | `s` | Current HTTP semantic conventions. |
+| `http.server.duration` | An SDK metric exporter sending to `/v1/metrics` | `ms` | Older HTTP semantic conventions. |
+
+- **Units.** The writer converts `s`, `ms`, `us` and `ns` to milliseconds using the metric's `unit`. An empty or unknown unit falls back to the default in the table.
+- **Temporality.** The collector converts cumulative series from SDKs to delta with its `cumulativetodelta` processor. The writer drops any point that still arrives as cumulative.
+- **Routes from SDK metrics.** HTTP server metrics carry `http.route` but not the raw path. A metric point without `http.route` is stored under the route `{unknown}`.
+- **Both sources for one service.** If a service sends both SDK metrics and spans, the read side uses only the SDK metrics for that service in the requested time range, so no request is counted twice. A service that switches between the two within one range is counted from its metrics only.
+
+## spanmetrics
+
+The traces pipeline is `otlp` receiver → `resource/tenant` → `spanmetrics` connector. It has no exporter, so spans are not stored or forwarded.
+
+| Setting | Value |
+| --- | --- |
+| `namespace` | `traces.span.metrics`, so the histogram is `traces.span.metrics.duration` |
+| `aggregation_temporality` | `AGGREGATION_TEMPORALITY_DELTA` |
+| `metrics_flush_interval` | `15s` |
+| `histogram.unit` | `ms` |
+| `histogram.explicit.buckets` | See [Histogram buckets](#histogram-buckets) |
+
+### Dimensions
+
+spanmetrics adds its default dimensions `service.name`, `span.name`, `span.kind` and `status.code`, plus these configured ones:
+
+| Dimension | Used by the writer for |
+| --- | --- |
+| `http.route` | Route, first choice |
+| `url.path` | Route, second choice |
+| `http.target` | Route, third choice |
+| `http.request.method` | Method, first choice |
+| `http.method` | Method, second choice |
+| `http.response.status_code` | Status code, first choice |
+| `http.status_code` | Status code, second choice |
+
+Both the current and the older HTTP semantic conventions work. The writer reads `span.kind` to keep server spans and ignores `span.name` and `status.code`. Of the resource attributes, it reads only `service.name` and `scf.ingest_key`.
+
+### How attributes become stored fields
+
+| Stored field | Read from | When missing or invalid |
+| --- | --- | --- |
+| Service | Resource `service.name`, first 128 characters | `unknown_service` |
+| Route | `http.route`, `url.path`, `http.target`, then [normalized](/api/routes) and capped at 500 per service | `{unknown}` |
+| Method | `http.request.method`, `http.method`, upper-cased, first 16 characters | `_OTHER` |
+| Status code | `http.response.status_code`, `http.status_code`, an integer from 0 to 999 | `0` |
+| Minute | The data point's timestamp, truncated to the UTC minute | |
+
+## Histogram buckets
+
+Every latency histogram is stored as 15 counts on one fixed set of bounds in milliseconds:
+
+```text
+5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000
+```
+
+| Slot | Counts requests that took |
+| --- | --- |
+| 0 | 5 ms or less |
+| 1 | more than 5 ms, up to 10 ms |
+| 2 | more than 10 ms, up to 25 ms |
+| 3 | more than 25 ms, up to 50 ms |
+| 4 | more than 50 ms, up to 75 ms |
+| 5 | more than 75 ms, up to 100 ms |
+| 6 | more than 100 ms, up to 250 ms |
+| 7 | more than 250 ms, up to 500 ms |
+| 8 | more than 500 ms, up to 750 ms |
+| 9 | more than 750 ms, up to 1,000 ms |
+| 10 | more than 1,000 ms, up to 2,500 ms |
+| 11 | more than 2,500 ms, up to 5,000 ms |
+| 12 | more than 5,000 ms, up to 7,500 ms |
+| 13 | more than 7,500 ms, up to 10,000 ms |
+| 14 | more than 10,000 ms |
+
+These are the bucket boundaries OpenTelemetry recommends for `http.server.request.duration`, converted from seconds, and the ones the collector's spanmetrics uses. An SDK histogram with the default boundaries maps one to one.
+
+- **Other boundaries.** Each source bucket is counted in the fixed bucket that holds its upper bound. A source histogram with no boundaries is placed at its mean.
+- **Why fixed.** Counts on the same boundaries add up without loss. p50, p95 and p99 stay accurate to the bucket when Lumenstat sums several instances of a service or a long time range.
+- **Percentiles.** The read side interpolates linearly inside the bucket that holds the requested rank and rounds to 0.1 ms. A percentile that falls in slot 14 reads 10,000 ms.
+
+## Storage
+
+The writer adds each point to one row of `scf_api.api_metric_minute`:
+
+| Column | Type |
+| --- | --- |
+| `tenant_id` | `uuid` |
+| `service_name` | `text` |
+| `route` | `text` |
+| `method` | `text` |
+| `status_code` | `integer` |
+| `source` | `text`, `metrics` or `spans` |
+| `bucket_start` | `timestamptz`, the UTC minute |
+| `request_count` | `bigint` |
+| `duration_sum_ms` | `double precision` |
+| `bucket_counts` | `bigint[]`, the 15 slots |
+
+The primary key is every column from `tenant_id` to `bucket_start`. A point for an existing row adds its count, duration and bucket counts to it. The schema is in [`apps/writer/db/migrations/001_init.sql`](https://github.com/boundlessfi/lumenstat/blob/main/apps/writer/db/migrations/001_init.sql).
+
+## Drop reasons
+
+The writer counts every data point it drops, by reason, in its own log. These counts are not shown to projects.
+
+| Reason | The point |
+| --- | --- |
+| `unknown_metric` | is not one of the three accepted series |
+| `unknown_ingest_key` | has no `scf.ingest_key`, or one that is unknown, revoked or belongs to a suspended tenant |
+| `not_server_span` | comes from spanmetrics and its `span.kind` is not `SPAN_KIND_SERVER` |
+| `not_delta` | has cumulative temporality |
+| `empty` | has a count of zero |

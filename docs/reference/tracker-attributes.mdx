@@ -1,0 +1,282 @@
+---
+title: "Tracker attributes"
+description: "Every data attribute the tracker reads, the umami JavaScript API, and the proof-of-work header sent with each event."
+icon: "code-xml"
+---
+
+The tracker is configured with `data-*` attributes on its `<script>` tag. It is Umami's tracker with Lumenstat's patches, so it reads Umami's attribute names. This page lists every attribute tracker 1.0.0 reads, the `umami` object it exposes, and the request it sends. Only `data-website-id` is required.
+
+```html
+<script
+  defer
+  src="https://t.lumenstat.com/v/1.0.0/l.js"
+  integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+  crossorigin="anonymous"
+  data-website-id="YOUR-WEBSITE-ID"
+  data-domains="example.org,www.example.org"
+></script>
+```
+
+Source: `src/tracker/index.ts` and `src/tracker/pow.ts` in `vendor/umami`, which `scripts/sync-umami.sh` builds from Umami v3.5.0 and the patches in [`patches/umami`](https://github.com/boundlessfi/lumenstat/tree/main/patches/umami). The proof of work is added by [patch 0004](https://github.com/boundlessfi/lumenstat/blob/main/patches/umami/0004-scf-flag-suspect-traffic-instead-of-counting-it-bot-.patch).
+
+## How values are read
+
+- **Read once.** The tracker reads its configuration when the script runs. Changing an attribute later has no effect.
+- **Strings only.** An option that is on by default turns off only with the exact value `"false"`. An option that is off by default turns on only with the exact value `"true"`. `data-do-not-track="1"` does nothing.
+- **Global config.** Each option can also come from a `window.umamiConfig` object defined before the tracker runs, under the camel-case name: `websiteId`, `hostUrl`, `domains`, `autoTrack` and so on. A `data-*` attribute wins over `umamiConfig`. Arrays are joined with commas. Without a `<script>` element the tracker runs only if `umamiConfig.websiteId` is set.
+
+## Core
+
+<ParamField path="data-website-id" type="string" required>
+  The website id (a UUID) from your project's **Setup** page. Without it the tracker sends nothing. The proof of work is computed over this id.
+
+  Example: `data-website-id="e676c9b4-11e4-4ef1-a4d7-87001773e9f2"`
+</ParamField>
+
+<ParamField path="data-host-url" type="string" default="https://t.lumenstat.com">
+  Base URL of the collect endpoint. The tracker removes a trailing slash and posts to `<data-host-url>/e`. The default is built into each release, so a copy of `l.js` served from your own domain still sends to `https://t.lumenstat.com`. Set it only when you run your own Lumenstat. The `/e` path is fixed in the release.
+
+  Example: `data-host-url="https://t.example.com"`
+</ParamField>
+
+<ParamField path="data-domains" type="string (comma-separated)" default="none: send from any hostname">
+  The hostnames the tracker may send from. When set, the tracker sends nothing unless `location.hostname` equals one of the entries exactly. There is no subdomain or `www.` matching here, so list `example.org` and `www.example.org` separately.
+
+  This is a filter in the browser. It is separate from the server's origin check ([layer 1](/reference/flag-reasons#layer-1-real-browser)), which accepts subdomains of the site's registered domains. Use it to keep `localhost` and preview deployments from sending events at all.
+
+  Example: `data-domains="example.org,www.example.org"`
+</ParamField>
+
+<ParamField path="data-tag" type="string" default="none">
+  A label sent as `tag` with every event from this script, for example to tell two variants of a page apart. A tag that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is rejected by the collect endpoint with HTTP 400, a guard against spreadsheet formula injection.
+
+  Example: `data-tag="landing-b"`
+</ParamField>
+
+## Automatic tracking
+
+<ParamField path="data-auto-track" type="boolean" default="true">
+  `"false"` turns off everything automatic: the first page view, page views on client-side navigation, click events from `data-umami-event`, and performance metrics. What is still sent: your own `umami.track` and `umami.identify` calls, and the `identify` call for `data-distinct-id`.
+
+  Example: `data-auto-track="false"`
+</ParamField>
+
+<ParamField path="data-auto-pageview" type="boolean" default="true">
+  `"false"` stops automatic page views, both the first one and those on client-side navigation. Click events and performance metrics keep working.
+
+  Example: `data-auto-pageview="false"`
+</ParamField>
+
+<Note>
+  Client-side navigation is detected by wrapping `history.pushState` and `history.replaceState`. A page view is sent 300 ms after the URL changes, and only when the new URL differs from the previous one. The tracker does not listen to `popstate` or `hashchange`, so back and forward buttons and plain `#anchor` links do not send a page view.
+</Note>
+
+<ParamField path="data-exclude-search" type="boolean" default="false">
+  `"true"` removes the query string from the page URL and the referrer before sending. This also removes `utm_*` parameters. Without it, the collect endpoint already drops every query parameter except `utm_*` (`SCF_STRIP_QUERY`).
+
+  Example: `data-exclude-search="true"`
+</ParamField>
+
+<ParamField path="data-exclude-hash" type="boolean" default="false">
+  `"true"` removes the `#fragment` from the page URL and the referrer before sending. Without it, the fragment is stored as part of the page path.
+
+  Example: `data-exclude-hash="true"`
+</ParamField>
+
+<ParamField path="data-do-not-track" type="boolean" default="false">
+  `"true"` makes the tracker send nothing when the browser's Do Not Track signal is on: `navigator.doNotTrack`, `window.doNotTrack` or `navigator.msDoNotTrack` equal to `1`, `"1"` or `"yes"`.
+
+  Example: `data-do-not-track="true"`
+</ParamField>
+
+## Sending
+
+<ParamField path="data-before-send" type="string" default="none">
+  The name of a global function called before every send as `fn(type, payload)`. `type` is `event`, `identify`, `performance` or `error`. Return the payload, or a promise of it, to send it. Return a falsy value to drop it. The proof of work is computed after this callback, on the payload it returns, so you can rewrite `url` here. In `umamiConfig`, `beforeSend` can be the function itself.
+
+  Example: `data-before-send="scrubPayload"`
+
+  ```js
+  window.scrubPayload = (type, payload) => {
+    if (payload.url?.includes('/admin')) return null;
+    return payload;
+  };
+  ```
+</ParamField>
+
+<ParamField path="data-fetch-credentials" type="string" default="omit">
+  The `credentials` mode of the collect request: `omit`, `same-origin` or `include`. The collect endpoint uses no cookies, so leave the default. Error reports always use `omit`.
+
+  Example: `data-fetch-credentials="omit"`
+</ParamField>
+
+## Identity and salts
+
+<Warning>
+  A distinct id ties events to an identifier you choose. It is stored with the session and its events, so it can turn them into personal data. The [privacy statement](/trust/privacy) describes stored records that hold no personal data, which assumes you do not set one. Do not send email addresses, account names or Stellar addresses as a distinct id.
+</Warning>
+
+<ParamField path="data-distinct-id" type="string" default="none">
+  Sets a distinct id for the visitor and sends an `identify` call when the script loads. The id is mixed into the session id and stored, truncated to 50 characters.
+
+  Example: `data-distinct-id="cohort-2026-q4"`
+</ParamField>
+
+<ParamField path="data-salt" type="string" default="none">
+  A value the tracker sends as `salt` with each event. **It has no effect on Lumenstat.** The server mixes a client salt into the session hash only when Umami's `ENABLE_CLIENT_SALT` is set, and Lumenstat does not set it. Sessions use the random daily salt instead.
+
+  Example: `data-salt="2026-11-13"`
+</ParamField>
+
+<ParamField path="data-salt-rotation" type="string" default="none">
+  `hourly`, `daily`, `weekly` or `monthly`: builds `salt` from the current UTC time. Ignored when `data-salt` is set. **No effect on Lumenstat**, for the same reason as `data-salt`.
+
+  Example: `data-salt-rotation="daily"`
+</ParamField>
+
+## Performance and errors
+
+The Lumenstat dashboard does not show performance or error data today.
+
+<ParamField path="data-performance" type="boolean" default="false">
+  `"true"` sends Web Vitals for each page view as a `performance` event: TTFB, FCP, LCP, CLS and INP. The event is sent once per page view, when the page is hidden or unloaded, on the next client-side navigation, or 10 seconds after load, whichever comes first. Performance events carry the proof-of-work header and go through the same checks as page views.
+
+  Example: `data-performance="true"`
+</ParamField>
+
+<ParamField path="data-errors" type="boolean" default="false">
+  `"true"` reports uncaught errors and unhandled promise rejections, and turns on `umami.captureException`. A page sends at most 20 reports per minute and drops any report over 48,000 bytes. A report is sent up to three times when the request fails or gets a 5xx response. After a 429 the page stops sending for the `Retry-After` period, clamped to 1 to 300 seconds.
+
+  Error reports are sent without `x-lumenstat-pow`, and the collect endpoint handles them before the four quality checks, so none of those checks run on them. Umami's user-agent bot check does.
+
+  Example: `data-errors="true"`
+</ParamField>
+
+<ParamField path="data-release" type="string" default="empty">
+  A release name attached to error reports, up to 100 characters.
+
+  Example: `data-release="web@2.4.1"`
+</ParamField>
+
+<ParamField path="data-environment" type="string" default="production">
+  An environment name attached to error reports, up to 50 characters.
+
+  Example: `data-environment="staging"`
+</ParamField>
+
+{/* TODO: confirm whether Lumenstat intends to support data-errors at all. Error reports bypass the four quality checks and are not described in PRIVACY.md. */}
+
+## Click events
+
+Add `data-umami-event` to any element to send a custom event when it is clicked. Each `data-umami-event-<key>` attribute on the same element adds a property, always as a string.
+
+```html
+<button data-umami-event="signup" data-umami-event-plan="free">Sign up</button>
+```
+
+The listener runs in the capture phase and uses the closest ancestor with `data-umami-event`, so clicks on child elements count. For a link that opens in the same tab, the tracker holds the navigation, sends the event, then follows the link (in the top window for `target="_top"`). Links with `target="_blank"`, and Ctrl, Shift, Cmd or middle clicks, navigate normally while the event is sent.
+
+## Opting out a browser
+
+Run this once in a browser's console to stop that browser from sending events, for example on your own machines:
+
+```js
+localStorage.setItem('umami.disabled', '1');
+```
+
+Any value works. Remove the key to start sending again. Inside an iframe, a window named `umami.disabled` is also skipped. The tracker reads this one local storage key and never writes to local storage.
+
+## JavaScript API
+
+The first tracker that runs on a page creates `window.umami`. A second tracker on the same page does not replace it. The object exists only after the script has run, and calls made earlier are not queued, so check for it when you call it from code that may run first.
+
+```ts
+umami.track(): Promise<void>
+umami.track(eventName: string): Promise<void>
+umami.track(eventName: string, data: EventData): Promise<void>
+umami.track(properties: PageViewProperties): Promise<void>
+umami.track(fn: (props: PageViewProperties) => EventProperties | PageViewProperties): Promise<void>
+
+umami.identify(id: string, data?: EventData): Promise<void>
+umami.identify(data: EventData & { id?: string }): Promise<void>
+
+umami.getSession(): { cache: string | undefined; website: string | null }
+umami.captureException(error: unknown, options?: ErrorCaptureOptions): Promise<void>
+```
+
+| Call | Sends |
+| --- | --- |
+| `umami.track()` | A page view with the default properties. |
+| `umami.track('signup')` | A custom event named `signup` with the default properties. |
+| `umami.track('signup', { plan: 'free' })` | A custom event with event data. |
+| `umami.track({ website, url, title })` | Exactly the object you pass, as a page view. The default properties are **not** merged in, so include `website` and every property you want stored. |
+| `umami.track(props => ({ ...props, url: '/checkout' }))` | Whatever the function returns, given the default properties. Without `name`, it is a page view. |
+| `umami.identify('cohort-a', { plan: 'pro' })` | An `identify` call that sets the distinct id and stores session data. See the warning above. |
+| `umami.identify({ plan: 'pro' })` | Session data. An `id` key in the object sets the distinct id. |
+| `umami.getSession()` | Nothing. Returns the website id and the cache token from the last response. |
+| `umami.captureException(error, { tags })` | An error report, only when `data-errors="true"`. |
+
+The default properties are `website`, `hostname`, `url`, `referrer`, `title`, `screen`, `language`, `tag`, `id` (the distinct id) and `salt`. `url` is the full page URL after `data-exclude-search` and `data-exclude-hash` are applied. A same-origin referrer is sent as a path only.
+
+The promises resolve when the request completes and never reject. They resolve without sending when tracking is off: no website id, the browser opted out, the hostname is not in `data-domains`, or Do Not Track is on with `data-do-not-track="true"`.
+
+### Limits on names and data
+
+- Event names longer than 50 characters are truncated when stored.
+- An event name that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is rejected with HTTP 400.
+- Event data is any JSON object. A number whose absolute value is `1e15` or more (outside an array), or nesting deeper than 32 levels, is rejected with HTTP 400.
+- Umami's tracker types document further limits: strings up to 500 characters, arrays stored as strings, at most 50 properties per object.
+
+## The collect request
+
+Every event is a `POST` to `<data-host-url>/e` with `keepalive: true` and this JSON body:
+
+```json
+{
+  "type": "event",
+  "payload": {
+    "website": "e676c9b4-11e4-4ef1-a4d7-87001773e9f2",
+    "hostname": "example.org",
+    "url": "https://example.org/pricing",
+    "referrer": "https://news.example.net/",
+    "title": "Pricing",
+    "screen": "1440x900",
+    "language": "en-US"
+  }
+}
+```
+
+`type` is `event` for page views and custom events, `identify` or `performance`. Custom events add `name` and `data`.
+
+<ParamField header="x-lumenstat-pow" type="string" required>
+  The proof of JavaScript, as `<slot>.<nonce>`.
+
+  - `slot` is the 10-minute window the event was sent in: `floor(unix time in ms / 600000)`.
+  - `nonce` is the first non-negative integer for which `sha256("<website>:<slot>:<url>:<nonce>")` starts with at least 10 zero bits. `website` and `url` are the payload's values exactly as sent, and the string is UTF-8.
+
+  The tracker tries about 1,000 hashes on average, a few milliseconds on a phone. It keeps the last result, so repeat events for the same website, URL and window cost nothing.
+
+  The server accepts a slot within one window of its own clock, and requires `SCF_POW_BITS` zero bits (10 on the hosted service). A missing header flags the event as `no_proof`. A malformed, stale or insufficient one flags it as `bad_proof`. See [Flag reasons](/reference/flag-reasons#layer-2-proof-of-javascript).
+
+  Example, for the payload above at 12:00 UTC on 13 November 2026: `x-lumenstat-pow: 2990952.213`. The digest starts `00156481…`, which is 11 zero bits.
+</ParamField>
+
+<ParamField header="x-umami-website-id" type="string">
+  The website id from `data-website-id`.
+</ParamField>
+
+<ParamField header="x-umami-hostname" type="string">
+  `location.hostname` of the page.
+</ParamField>
+
+<ParamField header="x-umami-cache" type="string">
+  The cache token from the previous response on this page, once there is one. The server uses it to keep later events on the page in the same session.
+</ParamField>
+
+The browser adds `Origin` and the Fetch Metadata headers (`Sec-Fetch-Mode`, `Sec-Fetch-Site`) itself. Layer 1 of the [bot and inflation defense](/trust/bot-defense) depends on them.
+
+A counted event gets `{"cache": "…", "sessionId": "…", "visitId": "…"}`. An event rejected as a bot, or flagged by a quality check, gets `{"beep": "boop"}`. The reply does not say which check failed.
+
+<Warning>
+  The proof of work raises the cost of faking events. It does not prove a human. A script that reimplements it, like `scripts/fake-event.mjs --level proof`, passes this layer. The other layers and their limits are on [Bot and inflation defense](/trust/bot-defense).
+</Warning>

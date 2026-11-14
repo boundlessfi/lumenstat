@@ -2,15 +2,33 @@
 
 **Proof of usage for the Stellar ecosystem.** Privacy-first web and API analytics for projects building on Stellar, run as a shared service for the Stellar Community Fund. This repo is the MVP for the SCF RFP *Web and API Analytics for Stellar Ecosystem Projects*.
 
-- **Web:** a patched [Umami](https://github.com/umami-software/umami) v3.5.0 (MIT, PostgreSQL). No cookies, country-only geography, a random daily salt that expires after 48 hours, and only browser events from a site's own domains are counted.
+- **Web:** a patched [Umami](https://github.com/umami-software/umami) v3.5.0 (MIT, PostgreSQL). No cookies, country-only geography, a random daily salt that expires after 48 hours. Four bot and inflation checks; traffic that fails them is stored as flagged and never counted.
+- **Tracker:** versioned, immutable releases with SRI hashes (`packages/tracker`, also an npm package), on ad-block-safe paths.
+- **Enrollment:** projects sign up themselves at `/signup` with their domains and a Stellar link, and get a snippet and an API ingest key in minutes.
 - **API:** tenants dual-export OpenTelemetry to our collector. Traces and logs are dropped; only request counts, status codes and latency histograms are kept, per normalized route, in PostgreSQL.
+
+## Try it
+
+Live at **[app.lumenstat.com](https://app.lumenstat.com)**.
+
+1. **Enroll a test project** at [app.lumenstat.com/signup](https://app.lumenstat.com/signup): a project name, a domain, and a Stellar link (your SCF project page, a page on stellar.expert, or a G… or C… address). You land on the Setup page with your snippet.
+2. **Send fake traffic** the way an inflator would, with the website id from your snippet:
+   ```bash
+   node scripts/fake-event.mjs --site <website id> --domain <your domain> --level forged
+   ```
+   Open **Website** in the dashboard: the page views do not move, and the events appear under **Flagged, not counted** with the reason.
+3. **Check the tracker you embed** against its release notes:
+   ```bash
+   curl -s https://t.lumenstat.com/v/1.0.0/l.js | openssl dgst -sha384 -binary | openssl base64 -A
+   ```
+   The output must match the hash in [`packages/tracker/releases.json`](packages/tracker/releases.json) and in your snippet.
 
 ## What runs
 
 | Service | What it does | Port (local) |
 | --- | --- | --- |
 | `postgres` | One database: Umami's tables in `public`, API metrics in `scf_api` | 5440 |
-| `redis` | Daily salts and rejection counters. Persistence is off: nothing is written to disk | 6380 |
+| `redis` | Daily salts and per-network visitor counters. Persistence is off: nothing is written to disk | 6380 |
 | `umami` | Tracker, collect endpoint, tenant web dashboards (`vendor/umami` + `patches/umami`) | 3000 |
 | `collector` | OpenTelemetry Collector: tenant stamping, spanmetrics, drops traces and logs | 4317, 4318 |
 | `writer` | Stores API metrics, serves the metrics API and the API dashboard (`apps/writer`) | 8090 |
@@ -71,12 +89,28 @@ All are off unless set, so the fork behaves like upstream without them. Each pat
 | Env var | Effect |
 | --- | --- |
 | `SCF_COUNTRY_ONLY` | IPs are cut to /24 (IPv4) or /48 (IPv6) before the geo lookup; region and city are never stored |
-| `SCF_FRONTEND_ONLY` | Ignores caller-supplied `ip`, `userAgent`, `browser`, `os`, `device` on `/api/send` |
+| `SCF_FRONTEND_ONLY` | Ignores caller-supplied `ip`, `userAgent`, `browser`, `os`, `device` on the collect endpoint |
 | `SCF_STRIP_QUERY` | Stores `utm_*` only; drops other query parameters, ad click ids and referrer queries |
 | `SCF_RANDOM_DAILY_SALT` | Random session salt per UTC day in Redis, 48-hour TTL, never in the database |
-| `SCF_ENFORCE_ORIGIN` | Counts an event only with an `Origin` on the site's domain and browser Fetch Metadata headers; rejections are counted in Redis per site, reason and day |
+
+### Bot and inflation checks (the quality flag)
+
+Events that fail any check are stored in `scf_flagged_event`, apart from Umami's own tables, so they never reach a project's numbers. Operators see them under **Traffic quality**, with the reasons. Flagged rows keep the path, referrer domain, country and coarse device, never the IP or query string.
+
+| Layer | Env var | Flags an event when |
+| --- | --- | --- |
+| 1. Real browser | `SCF_ENFORCE_ORIGIN` | the `Origin` is not one of the site's domains, or browser Fetch Metadata headers are missing |
+| 2. Proof of JavaScript | `SCF_POW_BITS` (10) | the tracker's proof-of-work header is missing or wrong: `sha256(site:slot:url:nonce)` must start with N zero bits, slot being the 10-minute window |
+| 3. Data center | `SCF_DATACENTER_RANGES` | the IP is in a published cloud or hosting range (`deploy/datacenter-ranges.txt`, rebuilt by `scripts/update-datacenter-ranges.mjs`) |
+| 4. Many visitors per network | `SCF_MAX_VISITORS_PER_IP_HOUR` | a site sees more new visitors than the limit from one /24 or /48 in an hour (counted in a Redis HyperLogLog under HMACs keyed by the daily salt) |
+
+Try it: `node scripts/fake-event.mjs --site <website id> --level naive|forged|proof` sends scripted page views the way an inflator would; they show up as flagged, not counted.
 
 Fetch Metadata headers are sent only in secure contexts (HTTPS or localhost), so sites must serve over HTTPS.
+
+## Tracker releases
+
+`node scripts/build-tracker.mjs` builds the tracker from `vendor/umami` and records it in `packages/tracker/releases/<version>.js` with its SRI hash in `releases.json`. A released version must rebuild byte for byte (`--check`, also run by `deploy/deploy.sh`); to change the tracker, bump the version. Releases are served at `https://t.<domain>/v/<version>/l.js` with a one-year immutable cache, and published to npm as `@lumenstat/tracker`.
 
 ## API metrics
 
@@ -100,7 +134,8 @@ Metrics API (Bearer read key): `GET /v1/api-metrics/tenants` and `GET /v1/api-me
 - **Who is who:** sign-in uses Umami accounts. A project is an Umami team. Members see their team's project; Umami admins are SCF operators and also get the operator screens. Identity is checked with Umami on every request; the session cookie holds only the Umami token.
 - **Website data** is read with the viewer's own Umami token, so Umami enforces which sites they can see.
 - **API data** is read with the dashboard's operator key and filtered on the server to the API tenant linked to the project (`npm run tenant:link -- <tenant id> <team id>` in `apps/writer`).
-- **Screens:** Overview, Website, API, Setup (snippet with SRI hash, live "is data arriving" check), Settings; and for operators All projects, Compare, Enrollment, Keys and health.
+- **Screens:** Overview, Website, API, Setup (pinned snippet with SRI hash, live "is data arriving" check, self-service ingest keys), Settings; and for operators All projects, Compare, Traffic quality, Enrollment (with the approval queue), Keys and health.
+- **Enrollment:** `/signup` creates the owner's Umami account and team, then (by `ENROLLMENT_MODE`) approves at once (`open`), waits for an operator (`approval`), or is off (`closed`). Approval creates one Umami website per domain and the API tenant. The Stellar link must be a valid G… account (checked on Horizon mainnet), a C… contract, or a page on communityfund.stellar.org, stellar.expert, stellarchain.io or lumenscan.io. The dashboard needs `UMAMI_ADMIN_PASSWORD` for this, and the writer's operator key.
 
 ```bash
 cd apps/dashboard
@@ -118,18 +153,16 @@ cd vendor/umami && pnpm vitest run src/lib/scf               # the Umami patches
 cd apps/dashboard && npm run build                           # type checks every page
 ```
 
-## Not in this MVP yet
+## Not built yet
 
 Tracked against the RFP milestones:
 
-- Versioned, immutable tracker URLs and an npm package with provenance (the seed pins today's tracker with SRI).
-- Ad-blocker-safe script and endpoint names (`TRACKER_SCRIPT_NAME`, `COLLECT_API_ENDPOINT` need build-time wiring in the image).
-- Flagged-but-stored events, proof-of-work, per-IP fingerprint counting and data-center ranges (only the origin and fetch-metadata layer is in).
-- Multiple domains per site (Umami's domain field accepts one).
-- Dashboard: self-service sign-up and enrollment approval, issuing and revoking keys from the UI, CSV export and deletion, API trend charts, rejected-traffic counts, and a Docker image for the dashboard.
+- Milestone 1, outside the code: counsel review of [PRIVACY.md](PRIVACY.md), the first npm publish of `@lumenstat/tracker`, Boundless instrumented in production.
+- Multiple domains per Umami website (each domain is its own website today).
+- Approval queue: suspend and remove, anomaly view, CSV export and deletion, API trend charts, operator read-key management in the UI.
 - Aggregated queries for the operator screens (today they call Umami once per project and site).
 - API metric rollups (hourly, daily) and retention jobs.
-- Edge authentication of ingest keys at the collector (the writer drops unknown keys today), NATS buffer, OpenTofu and Ansible, monitoring, backups and runbooks.
+- Edge authentication of ingest keys at the collector (the writer drops unknown keys today), NATS buffer, monitoring, backups and runbooks.
 
 ## License
 

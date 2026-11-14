@@ -1,0 +1,211 @@
+---
+title: "Configuration"
+description: "Every environment variable for the Umami fork, the dashboard, the collector and the writer, with the values the server Compose file sets."
+icon: "sliders-horizontal"
+---
+
+Lumenstat is configured with environment variables. On a server, secrets live in `/srv/lumenstat/.env`, which `bootstrap.sh` creates, and everything else is written into [`deploy/compose.yaml`](https://github.com/boundlessfi/lumenstat/blob/main/deploy/compose.yaml). This page lists every variable by service, with the default in the code and the value `deploy/compose.yaml` sets. Values on this page are placeholders, never real secrets.
+
+## The env file
+
+`bootstrap.sh` writes `/srv/lumenstat/.env` on the first run, with mode 600, and never overwrites it. Compose reads it with `--env-file` and passes each value to the services that need it.
+
+```bash /srv/lumenstat/.env
+POSTGRES_PASSWORD=<random>
+UMAMI_APP_SECRET=<random>
+SCF_COLLECTOR_SECRET=<random>
+WRITER_OPERATOR_KEY=<random>
+UMAMI_ADMIN_PASSWORD=<random>
+CLOUDFLARE_TUNNEL_TOKEN=<tunnel token>
+# Optional: ENROLLMENT_MODE=approval
+```
+
+| Variable | Created as | Passed to |
+| --- | --- | --- |
+| `POSTGRES_PASSWORD` | Random, 40 characters | `postgres`, and inside `DATABASE_URL` for `umami` and `writer` |
+| `UMAMI_APP_SECRET` | Random, up to 64 characters | `umami` as `APP_SECRET` |
+| `SCF_COLLECTOR_SECRET` | Random, 40 characters | `collector` and `writer` |
+| `WRITER_OPERATOR_KEY` | Random, 40 characters | `writer` as `SCF_BOOTSTRAP_OPERATOR_KEY`, `dashboard` as `WRITER_API_KEY` |
+| `UMAMI_ADMIN_PASSWORD` | Random, 32 characters | `dashboard`. `bootstrap.sh` also sets Umami's `admin` password to it. |
+| `CLOUDFLARE_TUNNEL_TOKEN` | Empty. You fill it in. | `cloudflared` as `TUNNEL_TOKEN` |
+| `ENROLLMENT_MODE` | Not created | `dashboard`. Defaults to `open`. |
+
+Compose refuses to start when `POSTGRES_PASSWORD`, `UMAMI_APP_SECRET`, `SCF_COLLECTOR_SECRET`, `WRITER_OPERATOR_KEY` or `UMAMI_ADMIN_PASSWORD` is missing.
+
+<Warning>
+  Two of these cannot be changed by editing the file alone.
+
+  - **`POSTGRES_PASSWORD`**: PostgreSQL sets the password only when it creates the `pgdata` volume. Change it in the database first (`ALTER USER lumenstat PASSWORD …`), then in the file.
+  - **`UMAMI_ADMIN_PASSWORD`**: `bootstrap.sh` replaces only the default password `umami`. Change the `admin` password in Umami first, then in the file, or enrollment stops working because the dashboard can no longer sign in as admin.
+</Warning>
+
+## Umami
+
+The patched Umami in `vendor/umami`. The switches are read in `src/lib/scf`, added by the patches in [`patches/umami`](https://github.com/boundlessfi/lumenstat/tree/main/patches/umami). Each one is off unless set, so the fork behaves like upstream Umami without them.
+
+<Warning>
+  The on/off switches are on when set to **any non-empty value**, including `0` and `false`. To turn one off, remove the variable.
+</Warning>
+
+### Privacy switches
+
+<ParamField path="SCF_COUNTRY_ONLY" type="flag" default="off">
+  Cuts the IP to /24 (IPv4) or /48 (IPv6) before the geo lookup. Region and city are never stored.
+
+  `compose.yaml`: `"1"`
+</ParamField>
+
+<ParamField path="SCF_FRONTEND_ONLY" type="flag" default="off">
+  Ignores caller-supplied `ip`, `userAgent`, `browser`, `os` and `device` in the collect payload. These come from the request itself. `screen` is still read.
+
+  `compose.yaml`: `"1"`
+</ParamField>
+
+<ParamField path="SCF_STRIP_QUERY" type="flag" default="off">
+  Stores `utm_*` parameters only. Drops every other query parameter, ad click ids (`gclid`, `fbclid`, `msclkid`, `ttclid`, `li_fat_id`, `twclid`) and the referrer's query string.
+
+  `compose.yaml`: `"1"`
+</ParamField>
+
+<ParamField path="SCF_RANDOM_DAILY_SALT" type="flag" default="off">
+  Replaces Umami's date-derived session salt with a random salt per UTC day, stored in Redis under `scf:salt:<date>` with a 48-hour TTL and never in the database. The first instance to write it wins. Without `REDIS_URL`, each process keeps its own salt in memory, which is correct only for a single instance.
+
+  `compose.yaml`: `"1"`
+</ParamField>
+
+### Quality checks
+
+Each layer of the [bot and inflation defense](/trust/bot-defense) has its own switch. Events that fail are stored as flagged with a [reason](/reference/flag-reasons) and not counted.
+
+<ParamField path="SCF_ENFORCE_ORIGIN" type="flag" default="off">
+  Layer 1, real browser. Requires an `Origin` that matches one of the site's domains and the Fetch Metadata headers.
+
+  `compose.yaml`: `"1"`
+</ParamField>
+
+<ParamField path="SCF_POW_BITS" type="integer" default="0 (off)">
+  Layer 2, proof of JavaScript. The number of leading zero bits the tracker's `x-lumenstat-pow` proof must have, from 1 to 24. Any other value turns the check off. The tracker always works to 10 bits, so a value above 10 flags most real visitors.
+
+  `compose.yaml`: `"10"`
+</ParamField>
+
+<ParamField path="SCF_DATACENTER_RANGES" type="path" default="unset (off)">
+  Layer 3, data center. Path to a file with one CIDR range per line, `#` for comments. Read once per path and kept in memory: restart Umami after changing the file. If the file cannot be read, Umami logs `datacenter_ranges_unreadable` and the check flags nothing.
+
+  `compose.yaml`: `/etc/lumenstat/datacenter-ranges.txt`, mounted read-only from `deploy/datacenter-ranges.txt`
+</ParamField>
+
+<ParamField path="SCF_MAX_VISITORS_PER_IP_HOUR" type="integer" default="0 (off)">
+  Layer 4, many visitors per network. Distinct visitors allowed per site, per /24 or /48 network, per UTC hour. Must be a positive integer. Needs `REDIS_URL`; without Redis the check is off.
+
+  `compose.yaml`: `"150"`, generous because mobile carriers put many real people behind one IPv4 network
+</ParamField>
+
+### Upstream Umami variables
+
+`deploy/compose.yaml` sets these Umami variables too. Umami reads many more; see its documentation.
+
+| Variable | `compose.yaml` | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | `postgresql://lumenstat:${POSTGRES_PASSWORD}@postgres:5432/lumenstat` | The database. |
+| `REDIS_URL` | `redis://redis:6379` | Daily salts and network counters. |
+| `APP_SECRET` | `${UMAMI_APP_SECRET}` | Signs Umami's login tokens and the collect cache token. Layer 4 also falls back to it when the daily salt is off. |
+| `CLIENT_IP_HEADER` | `cf-connecting-ip` | The header that holds the visitor's IP. Safe because the origin is reachable only through the tunnel. If the header is absent, Umami falls back to its list of common proxy headers. |
+| `COLLECT_API_ENDPOINT` | `/e` (build argument) | Adds the `/e` → `/api/send` rewrite at build time. Tracker releases post to `/e`. |
+
+These upstream variables interact with the patches. `deploy/compose.yaml` sets none of them:
+
+| Variable | Effect |
+| --- | --- |
+| `SKIP_LOCATION_HEADERS` | Ignore CDN location headers such as Cloudflare's `cf-ipcountry` and always use the GeoLite database, so the country comes from the IP cut to /24 or /48. Both Compose files set it to `1`. The Docker image ships the database (patch 0005); an image built without it fails every lookup with this set. |
+| `IGNORE_IP` | IPs and ranges that get HTTP 403 before any quality check. |
+| `DISABLE_BOT_CHECK` | Turns off Umami's user-agent bot check, which runs before the four layers. |
+| `ENABLE_CLIENT_SALT` | Mixes the tracker's `data-salt` into the session salt. Off, so `data-salt` has no effect. |
+| `SKIP_BUILD_GEO` | Skips the GeoLite download during the build. Used in local host mode. |
+
+## Dashboard
+
+The Next.js app in `apps/dashboard`. For local runs, copy [`apps/dashboard/.env.example`](https://github.com/boundlessfi/lumenstat/blob/main/apps/dashboard/.env.example) to `.env.local`. Its values match the code defaults below.
+
+| Variable | Code default | `compose.yaml` | Purpose |
+| --- | --- | --- | --- |
+| `UMAMI_URL` | `http://localhost:3000` | `http://umami:3000` | Umami, for identity, website data and admin calls. Server side only. |
+| `WRITER_URL` | `http://localhost:8090` | `http://writer:8080` | The writer's metrics API. |
+| `WRITER_API_KEY` | empty | `${WRITER_OPERATOR_KEY}` | An operator read key. The dashboard filters API data per project on the server. |
+| `COLLECTOR_HEALTH_URL` | `http://localhost:13133` | `http://collector:13133` | The collector's health check, shown on **Keys and health**. |
+| `PUBLIC_UMAMI_URL` | `http://localhost:3000` | `https://t.lumenstat.com` | The public tracker host in setup snippets. When it is not `https://t.lumenstat.com`, snippets add `data-host-url`. |
+| `PUBLIC_COLLECTOR_URL` | `http://localhost:4318` | `https://otlp.lumenstat.com` | The public OTLP endpoint in setup snippets. |
+| `TRACKER_VERSION` | `1.0.0` | `"1.0.0"` | The release in setup snippets. Must exist in `packages/tracker/releases`. |
+| `ENROLLMENT_MODE` | `open` | `${ENROLLMENT_MODE:-open}` | `open` approves sign-ups at once, `approval` queues them for an operator, `closed` turns sign-up off. Any other value means `open`. |
+| `ENROLLMENT_DAILY_LIMIT` | `25` | `"25"` | Sign-ups accepted per UTC day. |
+| `UMAMI_ADMIN_PASSWORD` | none | `${UMAMI_ADMIN_PASSWORD}` | The Umami admin password, for enrollment and flagged-traffic summaries. |
+| `UMAMI_ADMIN_USERNAME` | `admin` | not set | The Umami admin account name. |
+| `ENROLLMENT_ALLOW_LOCAL` | off | not set | `1` accepts `localhost` and `127.0.0.1` as domains on the sign-up form. Local only. |
+
+The snippet's integrity hash is not configured. The dashboard fetches `<UMAMI_URL>/v/<TRACKER_VERSION>/l.js`, hashes it with SHA-384 and caches the result for an hour. If the fetch fails, the snippet is shown without `integrity`.
+
+The image sets `NODE_ENV=production`, which marks the session cookie `Secure`, and `PORT=3200`.
+
+<Note>
+  `PUBLIC_UMAMI_URL` and `PUBLIC_COLLECTOR_URL` are fixed to the production hostnames in `deploy/compose.yaml`. Edit them for your domain before deploying. On staging, snippets show the production hostnames until this is made configurable.
+</Note>
+
+## Collector
+
+The OpenTelemetry Collector, configured by [`apps/collector/config.yaml`](https://github.com/boundlessfi/lumenstat/blob/main/apps/collector/config.yaml).
+
+| Variable | Default | `compose.yaml` | Purpose |
+| --- | --- | --- | --- |
+| `SCF_COLLECTOR_SECRET` | none | `${SCF_COLLECTOR_SECRET}` | Sent as `x-scf-collector-secret` on every export to the writer. Must equal the writer's value. |
+| `SCF_WRITER_ENDPOINT` | none | `http://writer:8080` | The writer's base URL. Metrics are posted to `<endpoint>/v1/metrics` as OTLP/JSON. |
+
+The local Compose file defaults `SCF_WRITER_ENDPOINT` to `http://writer:8080`. In host mode, set it to `http://host.docker.internal:8090`.
+
+Fixed in `config.yaml`, not in the environment: OTLP on 4317 (gRPC) and 4318 (HTTP), health check on 13133, histogram buckets of 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500 and 10000 ms, a spanmetrics flush every 15 s, batches of up to 2,048 or 5 s, and retries to the writer for up to 10 minutes with a queue of 5,000.
+
+## Writer
+
+The Node service in `apps/writer`. It applies its migrations on start.
+
+| Variable | Default | `compose.yaml` | Purpose |
+| --- | --- | --- | --- |
+| `PORT` | `8080` | not set | HTTP port. |
+| `DATABASE_URL` | none, required | `postgresql://lumenstat:${POSTGRES_PASSWORD}@postgres:5432/lumenstat` | API metrics go in the `scf_api` schema. The writer refuses to start without it. |
+| `SCF_COLLECTOR_SECRET` | none, required | `${SCF_COLLECTOR_SECRET}` | Shared secret for `POST /v1/metrics`. At least 16 characters, or the writer refuses to start. Compared in constant time. |
+| `SCF_BOOTSTRAP_OPERATOR_KEY` | empty | `${WRITER_OPERATOR_KEY}` | An operator read key that needs no database row, for first setup. Ignored if shorter than 16 characters. Issue database-backed keys after that. |
+| `SCF_ROUTE_LIMIT` | `500` | not set | Routes kept per service. Further routes fold into `{other}`. |
+
+The writer's command-line tools read `DATABASE_URL` as well. On a server, run them inside the container, with the `dc` alias from [the overview](/self-hosting/overview#on-the-server):
+
+```bash
+dc exec writer node src/cli/key-create.ts --label <who> [--tenant <tenant id>] [--days <n>]
+dc exec writer node src/cli/key-revoke.ts <key id>
+```
+
+## PostgreSQL, Redis and cloudflared
+
+| Service | Setting | `compose.yaml` |
+| --- | --- | --- |
+| `postgres` | `POSTGRES_DB`, `POSTGRES_USER` | `lumenstat`, `lumenstat` |
+| `postgres` | `POSTGRES_PASSWORD` | `${POSTGRES_PASSWORD}` |
+| `redis` | command flags | `--save "" --appendonly no --maxmemory 200mb --maxmemory-policy noeviction` |
+| `cloudflared` | `TUNNEL_TOKEN` | `${CLOUDFLARE_TUNNEL_TOKEN:-}` |
+
+Redis writes nothing to disk and never evicts keys early: a lost salt would split visitor counts mid-day.
+
+## Local development
+
+`scripts/setup-env.sh` writes the repository's `.env` with random secrets, unless it exists. [`.env.example`](https://github.com/boundlessfi/lumenstat/blob/main/.env.example) shows the same names with placeholder values:
+
+```bash .env
+POSTGRES_PASSWORD=<random>
+UMAMI_APP_SECRET=<random>
+SCF_COLLECTOR_SECRET=<at least 16 characters>
+SCF_BOOTSTRAP_OPERATOR_KEY=<at least 16 characters>
+# Filled in by scripts/create-api-tenant.sh
+TEST_API_INGEST_KEY=
+```
+
+Locally the operator key is set directly as `SCF_BOOTSTRAP_OPERATOR_KEY`. On a server it is `WRITER_OPERATOR_KEY`, mapped to the same writer variable.
+
+The example API in `examples/test-api` reads `SCF_OTLP_ENDPOINT` (default `http://localhost:4318`), `SCF_INGEST_KEY`, `OTEL_SERVICE_NAME` (default `scf-test-api`) and `OWN_APM_CONSOLE` (`1` also prints spans to the console, standing in for a project's own APM).

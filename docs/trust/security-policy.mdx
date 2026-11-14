@@ -1,0 +1,80 @@
+---
+title: "Security policy"
+description: "How to report a vulnerability in Lumenstat, what happens after you report, what is in scope, and the safe harbor for good-faith research."
+icon: "shield-alert"
+---
+
+Lumenstat measures traffic for many Stellar projects at once, so a flaw can leak one project's numbers to another or let someone inflate them. Report vulnerabilities privately through GitHub, never in a public issue. Good-faith research that stays within this policy is welcome and covered by the safe harbor below.
+
+This page follows [`SECURITY.md`](https://github.com/boundlessfi/lumenstat/blob/main/SECURITY.md) in the repository.
+
+## Report a vulnerability
+
+<Card title="Report a vulnerability privately" icon="lock" href="https://github.com/boundlessfi/lumenstat/security/advisories/new">
+  Opens GitHub's private vulnerability reporting for the Lumenstat repository. Only the maintainers see your report.
+</Card>
+
+{/* TODO: confirm that private vulnerability reporting is enabled on the repository before this page goes live. The roadmap lists the reporting channel as "being enabled". */}
+
+Do not open a public issue, pull request or discussion for a security problem.
+
+Include:
+
+- What you found.
+- How to reproduce it.
+- What an attacker could do with it.
+
+A proof of concept against your own test project is ideal. You can enroll one at [app.lumenstat.com/signup](https://app.lumenstat.com/signup).
+
+## What happens next
+
+| Step | Target |
+| --- | --- |
+| Your report is acknowledged | Within 72 hours |
+| The issue is confirmed or ruled out, with a severity | Within 7 days |
+| A confirmed critical or high issue is fixed in production | Within 24 hours of confirmation |
+| Medium and low issues are fixed | In the next release |
+| An advisory is published, crediting you if you want | After the fix ships |
+
+These are targets, not contractual guarantees.
+
+## In scope
+
+- **Tenant isolation.** One project reading or changing another project's web or API data, keys or settings. See [Tenant isolation](/trust/tenant-isolation).
+- **The tracker and the collect endpoint.** Script injection through the tracker in `packages/tracker`, a release whose bytes do not match its published integrity hash, or a way to get fake traffic counted that the quality checks should catch. See [Tracker supply chain](/trust/tracker-supply-chain) and [Bot and inflation defense](/trust/bot-defense).
+- **The OpenTelemetry collector and the writer.** Ingest without a valid key, cross-tenant writes, or traces, spans or request bodies being stored.
+- **The dashboard.** Authentication, sign-up, sessions, and operator-only pages and actions.
+- **Lumenstat's own code around Umami.** The patches in `patches/umami`, and the deploy configuration in `deploy/` and `infra/`.
+
+## Out of scope
+
+- Volumetric denial of service, and rate limits on public endpoints.
+- Social engineering and physical attacks.
+- Vulnerabilities in upstream Umami that Lumenstat's patches do not touch. Report those to Umami. If they affect Lumenstat, report them here too.
+- Missing security headers or best practices without a demonstrated impact.
+
+## Safe harbor
+
+Lumenstat's maintainers will not take legal action against research done in good faith that stays within this policy. To stay within it:
+
+- Test only against projects you own.
+- Do not access or keep other people's data.
+- Do not degrade the service.
+- Give the maintainers reasonable time to fix the issue before you disclose it.
+
+## Supported versions
+
+| Component | What is supported |
+| --- | --- |
+| The service | The `main` branch, which is what runs in production. Fixes deploy from `main`. |
+| The tracker | Releases are immutable. A security fix to the tracker ships as a new version, listed in [`packages/tracker/releases.json`](https://github.com/boundlessfi/lumenstat/blob/main/packages/tracker/releases.json), and enrolled projects are told to upgrade. See [Tracker releases](/reference/tracker-releases). |
+
+Because a released tracker never changes, a fixed version does not reach a site until the project updates the URL and hash in its snippet.
+
+## How the service protects data
+
+- **Keys.** Ingest keys and API read keys are random, shown once, and stored only as SHA-256 hashes. See [Tenant isolation](/trust/tenant-isolation#keys-are-stored-as-sha-256-hashes).
+- **Visitor IP addresses** are never stored. See the [privacy model](/trust/privacy).
+- **No published ports.** The only way into the server is a Cloudflare Tunnel, which routes only the tracker, the collect endpoint, the OTLP endpoint and the dashboard. Umami's own admin UI and API are not reachable from the internet.
+- **Secrets** live in an environment file on the server, readable only by its owner, and never in the repository.
+- **CI** pins every third-party action by commit SHA. See [Tracker supply chain](/trust/tracker-supply-chain#ci-actions-pinned-by-commit-sha).

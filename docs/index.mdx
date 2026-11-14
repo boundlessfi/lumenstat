@@ -1,0 +1,59 @@
+---
+title: "Lumenstat"
+sidebarTitle: "Introduction"
+description: "Privacy-first web and API analytics for Stellar ecosystem projects, built so the Stellar Community Fund can trust the numbers."
+icon: "house"
+---
+
+Lumenstat measures how people use a Stellar project's website and API, and produces numbers that hold up when someone checks them. It sets no cookies, stores no IP addresses, keeps no API traces or request bodies, and refuses to count traffic that does not come from a real browser on a real network.
+
+It runs as one shared service for the [Stellar Community Fund](https://communityfund.stellar.org), so every project is measured by the same pipeline and the same rules. A project's page views on Lumenstat mean the same thing as another project's page views.
+
+<Columns cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Enroll a project and see your first page view in about 15 minutes.
+  </Card>
+  <Card title="How it works" icon="workflow" href="/how-it-works">
+    Two ingest paths, one store, and the checks every event passes on the way.
+  </Card>
+  <Card title="Website analytics" icon="globe" href="/web/add-the-tracker">
+    One pinned script tag. No consent banner for your visitors.
+  </Card>
+  <Card title="API analytics" icon="server" href="/api/overview">
+    Add a second OpenTelemetry exporter. Your own APM keeps the traces.
+  </Card>
+</Columns>
+
+## Why it exists
+
+SCF funds projects in tranches, and reviewers need usage numbers they can rely on. Most analytics tools answer a different question: they are built to help one team understand its own visitors, with whatever tracking that team is comfortable with, and they count whatever arrives at the collect endpoint. A number from one of them cannot be compared with a number from another, and a script can inflate either.
+
+Lumenstat is built for the comparison. Three properties make that work:
+
+<AccordionGroup>
+  <Accordion title="Private by construction" icon="eye-off">
+    Visitor IP addresses are used in memory for a country lookup and a daily visitor hash, then discarded. The hash uses a random salt that is deleted after 48 hours, after which no one, including the operator, can link a stored record to a person. Query strings are stripped except `utm_*` tags. See [Privacy](/trust/privacy).
+  </Accordion>
+  <Accordion title="Hard to inflate" icon="shield-check">
+    Every event passes four checks: it must come from a browser on the site's own domain, carry a proof of work computed by the tracker, come from outside known data-center ranges, and come from a network that is not sending an implausible number of new visitors. Events that fail are stored as flagged and never counted, so projects and operators can see attempts instead of absorbing them. See [Bot and inflation defense](/trust/bot-defense).
+  </Accordion>
+  <Accordion title="Verifiable" icon="badge-check">
+    The tracker you embed lives at an immutable, versioned URL with a published integrity hash, and it rebuilds byte for byte from source. The code, the infrastructure and these docs are MIT licensed. See [Tracker supply chain](/trust/tracker-supply-chain).
+  </Accordion>
+</AccordionGroup>
+
+## Who these docs are for
+
+**Project teams** adding the tracker or an API exporter start with the [Quickstart](/quickstart), then [Website analytics](/web/add-the-tracker) and [API analytics](/api/overview).
+
+**SCF reviewers and operators** start with the [operator overview](/operators/overview) and [Traffic quality](/operators/traffic-quality).
+
+**Security and privacy reviewers** start with the [Trust](/trust/privacy) section, which explains each control, what it stops, and what it does not.
+
+**Anyone running their own instance** starts with [Self-hosting](/self-hosting/overview).
+
+## What it is built on
+
+The web path is [Umami](https://github.com/umami-software/umami) v3.5.0 with a small set of documented patches, each behind its own switch. The API path is a standard [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) and a small writer service. Data lives in PostgreSQL on servers in the European Union. The dashboard is built with the [Stellar Design System](https://github.com/stellar/stellar-design-system).
+
+Lumenstat is built by [Boundless](https://www.boundlessfi.xyz) for the SCF request for proposals *Web and API Analytics for Stellar Ecosystem Projects*. The [roadmap](/project/roadmap) follows that proposal's milestones.

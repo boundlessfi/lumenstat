@@ -1,0 +1,96 @@
+---
+title: "Operator overview"
+description: "What SCF operators see in the dashboard: every project, side-by-side comparisons, traffic quality, enrollment, and keys and service health."
+icon: "layout-dashboard"
+---
+
+SCF operators use the same dashboard as projects, with access to every project and five screens of their own. An operator is an Umami administrator: there is no separate operator role to manage. Every project is measured by the same pipeline and the same bot rules, so the numbers on these screens can be compared directly.
+
+## Access
+
+- **Operators are Umami admins.** The dashboard asks Umami on every request whether the signed-in account is an admin. The session cookie holds only the Umami token, so nothing stored in the browser can grant operator access.
+- **Operator screens live under `/ops`.** Signing in as an operator opens **All projects**. Anyone who is not an admin gets a 404 on these pages, with no hint that they exist.
+- **Operators can open any project.** Each project's **Overview**, **Website**, **API**, **Setup** and **Settings** work for operators as for members. From a project, **Operator view** leads back.
+- **Making someone an operator** means giving their Umami account the admin role. Umami's own interface is not reachable from the internet, so this is done by whoever runs the service.
+
+| Screen | Path | What it is for |
+| --- | --- | --- |
+| All projects | `/ops/projects` | Every project's web and API usage in one table |
+| Compare | `/ops/compare` | Two to four projects side by side |
+| Traffic quality | `/ops/quality` | Flagged events per website, with reasons and the latest events |
+| Enrollment | `/ops/enrollment` | The sign-up mode, the approval queue and every enrolled project |
+| Keys and health | `/ops/keys` | Live service checks and how metrics API read keys are issued |
+
+**All projects**, **Compare** and **Traffic quality** have the same **Range** picker as project pages: last 24 hours, 7 days (the default) or 30 days. See [Your numbers](/dashboard/your-numbers#date-ranges).
+
+## All projects
+
+One row per project, under the line "Same pipeline and same bot rules for every project".
+
+| Column | Meaning |
+| --- | --- |
+| Project | Opens the project's **Overview** for the same range |
+| Sites | Websites in the project, one per domain |
+| Visitors | Unique visitors, counted per day and summed across the project's websites |
+| Page views | Counted page views |
+| API requests | Requests from the project's API tenant, or "not linked" when it has none |
+| API 5xx | Share of API requests that ended with a 5xx status |
+| API p95 | 95% of API requests finished faster than this |
+
+Rows are sorted by visitors plus API requests, largest first. Tick two to four projects and select **Compare selected** to open them in **Compare**.
+
+When API metrics cannot be loaded, a banner says so and the API columns stay empty. Below the table, **API tenants not linked to a project** lists tenants whose API data is stored but shows on no project page. Link one to its project from `apps/writer`:
+
+```bash
+npm run tenant:link -- <tenant id> <project id>
+```
+
+## Compare
+
+Two to four projects in columns, for one range: Unique visitors, Page views, Bounce rate, Visit duration, API requests, API 5xx rate, API p50 and API p95. A project without an API tenant shows "not linked".
+
+The selection and range are in the URL (`/ops/compare?ids=…&range=7d`), so a comparison can be sent to another operator. With fewer than two valid projects, the page links back to **All projects**.
+
+Read unique visitors with the counting rules in mind: a visitor is counted again on each UTC day, and a person who visits two of a project's domains counts twice. [How visitors are counted](/dashboard/your-numbers#how-visitors-are-counted) has the details.
+
+## Traffic quality
+
+Every website of every project, with its counted page views, its flagged events, the flagged share and the reasons, largest number of flagged events first. Selecting a website shows its 50 latest flagged events. See [Traffic quality](/operators/traffic-quality).
+
+## Enrollment
+
+The current sign-up mode, the queue of sign-ups waiting for approval, every enrolled project and the latest decisions. See [Enrollment](/operators/enrollment).
+
+## Keys and health
+
+**Service health** checks three services each time the page loads and shows **Up** or **Down** for each:
+
+| Check | What it calls |
+| --- | --- |
+| Web collection (Umami) | Umami's heartbeat endpoint |
+| API collector | The OpenTelemetry Collector's health check |
+| API metrics store (writer) | The writer's health endpoint |
+
+**Metrics API keys** are read-only keys for machine consumers of the [metrics API](/reference/metrics-api). A key is shown once, stored only as a SHA-256 hash, and the time of its last use is recorded. During the MVP, keys are issued and revoked from `apps/writer`:
+
+```bash
+npm run key:create -- --label "<who it is for>" [--tenant <tenant id>] [--days 90]
+npm run key:revoke -- <api key id>
+```
+
+A key created without `--tenant` reads every project. A key with `--tenant` reads only that tenant and gets a 404 for any other. API ingest keys are not issued here: project owners issue their own on **Setup**.
+
+<Note>
+  Issuing and revoking read keys from this page is planned for Milestone 2. Uptime history, counts of rejected traffic and backup status are planned with monitoring.
+</Note>
+
+{/* TODO: name the milestone for uptime history, rejected-traffic counts and backup status. The Keys and health page says "the monitoring milestone"; project/roadmap.mdx puts alerts, a status page and backups in Milestone 3. */}
+
+## What operators can and cannot see
+
+Operators see every project's aggregate numbers, the flagged-traffic summary for every website, the latest flagged events for a selected website, and the contact email each project enrolled with. They do not see IP addresses or query strings, because Lumenstat does not store them, and they cannot link a stored visitor to a person once the day's salt is deleted. See [Privacy](/trust/privacy).
+
+## Limits
+
+- **The operator screens scale with the number of projects.** They call Umami once per project and once per website on each load, so they slow down as enrollment grows. Aggregated queries for the operator view are part of Milestone 2.
+- **No export, anomaly view or project suspension yet.** CSV export, an anomaly view for sudden changes in traffic or flagged share, and suspending and removing projects are planned for Milestone 2. See the [roadmap](/project/roadmap).

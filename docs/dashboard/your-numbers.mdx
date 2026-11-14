@@ -1,0 +1,112 @@
+---
+title: "Your numbers"
+description: "What the Overview, Website, API, Setup and Settings pages show, how date ranges work, and how unique visitors are counted."
+icon: "chart-line"
+---
+
+Your project's dashboard at [app.lumenstat.com](https://app.lumenstat.com) has five pages: **Overview**, **Website**, **API**, **Setup** and **Settings**. Every number comes from the same pipeline and the same bot rules as every other SCF project, and traffic that failed those rules is in none of them. Unique visitors are counted per day, so over a week or a month they read as visitor-days, not as people.
+
+## Who can see a project
+
+You sign in with your Lumenstat account. For the person who enrolled the project, that is the email and password from sign-up. A project is an Umami team: its members see it, and anyone else who opens its URL gets a 404. SCF operators can open every project.
+
+- **Website numbers** are read with your own Umami session token, so Umami itself decides which websites you can see.
+- **API numbers** are read on the server and filtered to the API tenant linked to your project before anything reaches your browser.
+- **Your session** lasts 12 hours. The dashboard's cookie holds only your Umami token, and who you are is checked with Umami on every request.
+
+[Tenant isolation](/trust/tenant-isolation) explains these boundaries in detail.
+
+## Date ranges
+
+**Overview**, **Website** and **API** have a **Range** picker:
+
+| Range | Chart bars | Notes |
+| --- | --- | --- |
+| Last 24 hours | One per hour | |
+| Last 7 days | One per day | The default |
+| Last 30 days | One per day | |
+
+Each range is a rolling window that ends when the page loads. Chart buckets and their labels are in UTC, and buckets with no data show as zero. The range is part of the URL (`?range=24h`, `7d` or `30d`), so a shared link keeps it. Moving to another page from the navigation returns to the default. **Setup** always looks at the last 24 hours.
+
+## How visitors are counted
+
+Lumenstat sets no cookies, so it cannot recognize a returning visitor. A visitor is a hash of the website id, the IP address, the browser's user agent and a random salt. A new salt is used from midnight UTC, and each day's salt expires 48 hours after it is created. Once it is gone, no one can link a stored visitor to a person or to another day.
+
+The consequences for your numbers:
+
+- **A returning visitor on a new UTC day counts again.** A person who visits on Monday, Tuesday and Wednesday is three unique visitors in **Last 7 days**. A 7-day count is the sum of seven daily counts.
+- **Last 24 hours spans two UTC days.** A person active at 23:00 and again at 01:00 UTC counts twice.
+- **A new browser, device or network is a new visitor.** A phone that moves from Wi-Fi to mobile data during the day counts twice.
+- **Visitors are summed across your websites.** Each domain is its own website, so a person who visits two of your domains on the same day counts twice in the project totals.
+
+Over longer ranges, unique visitors run higher than in tools that recognize a returning visitor with a cookie. Compare like with like: daily numbers with daily numbers, or Lumenstat projects with Lumenstat projects.
+
+## Definitions
+
+| Number | What it is |
+| --- | --- |
+| Page views | Page views that passed every check. Custom events are counted separately. |
+| Unique visitors | Distinct visitor hashes in the range, per website, summed across the project's websites. Shown with the note "counted per day". |
+| Bounce rate | Visits with exactly one page view and no custom event, divided by all visits. |
+| Visit duration | Time from the first to the last page view of each visit, averaged over all visits. A one-page visit adds zero. |
+| Requests | API requests your services reported through OpenTelemetry. |
+| 5xx rate | Requests that ended with a 5xx status code, divided by all requests. |
+| p50, p95, p99 latency | Half, 95% and 99% of requests finished faster than this, computed from latency histograms. |
+
+When a number cannot be computed, such as a bounce rate with no visits, the tile shows a dash.
+
+## Overview
+
+The project at a glance for the selected range.
+
+- **Website tiles:** Unique visitors, Page views, Bounce rate and Visit duration.
+- **API tiles:** Requests, 5xx rate, p50 latency and p95 latency. Without a linked API, a banner links to **Setup** instead. "API metrics are unavailable right now" means the API metrics service did not answer: your data is not affected.
+- **Chart:** page views as bars and visitors as a line, per hour or per day.
+- **Top pages** and **Busiest API routes:** the five largest of each. Routes read as `METHOD route`, such as `GET /accounts/{account}`.
+
+When neither a website nor an API is connected, a banner links to **Setup**.
+
+## Website
+
+The domains of your websites are listed under the title. The page shows the four website tiles, the same chart, and ranked lists of the top eight values across your websites for the range:
+
+- **Pages:** the page path.
+- **Referrers:** the referring domain. Visits from your own site are not counted as referrals.
+- **Countries:** country only. Region and city are never stored. See [Privacy](/trust/privacy).
+- **Browsers** and **Devices:** reduced from the user agent. The raw user agent is not stored.
+- **Custom events:** event names with their counts. See [Custom events](/web/custom-events).
+- **Flagged, not counted:** events that failed the bot and inflation checks, by reason. They are in no other number on the page. See [Flagged traffic](/dashboard/flagged-traffic).
+
+
+## API
+
+Request numbers from the OpenTelemetry exporter you added, for the selected range.
+
+- **Tiles:** Requests, with the number of routes and services under it, then 5xx rate, p50 latency and p95 latency.
+- **Routes table:** one row per service, method and normalized route, with Requests, 2xx, 4xx and 5xx counts and p50, p95 and p99 latency. A 5xx count above zero is highlighted. The table shows 25 rows per page.
+
+Stellar addresses, ids and hashes in raw paths appear as placeholders such as `{account}`, `{contract}`, `{muxed}`, `{id}` and `{hash}`. Set `http.route` in your middleware to name routes yourself. [Route normalization](/api/routes) lists every rule, and [API analytics](/api/overview) shows how to connect a service.
+
+## Setup
+
+Everything needed to start collecting, and a check that it works.
+
+- **Is data arriving?** Two lines, computed each time the page loads from the last 24 hours. **Website** turns green with the number of counted page views, or reads "waiting for the first page view". **API** reads the number of requests, "connected, waiting for traffic", "not connected" or "status unavailable".
+- **Website snippet:** one pinned snippet per website, with its domain and a **Copy snippet** button. The integrity hash in it is computed from the tracker file the server sends. See [Add the tracker](/web/add-the-tracker).
+- **API (optional):** the two OpenTelemetry environment variables to add, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, and an **Issue an ingest key** button. Only the project owner or a manager can issue keys. A key is shown once and stored only as a hash. Issuing another key does not revoke earlier ones. If the project has no API tenant yet, the first key creates it.
+
+While your sign-up waits for an SCF operator, a banner on every page says so and **Setup** shows no snippet. If the sign-up was not approved, the banner says so, with the operator's reason when one was given.
+
+## Settings
+
+- **Website domains:** each website and its domain. Visits count only when the browser sends them from one of these domains or a subdomain of it.
+- **Team:** each member and their role in the project, such as owner or manager.
+- **Keys, tracker upgrades and your data:** project owners issue API ingest keys on **Setup**. An SCF operator adds domains, and runs exports or deletions on request.
+
+<Note>
+  Planned: CSV export, deletion of your data by date range, and tracker upgrade notices. Self-service deletion is part of Milestone 3 on the [roadmap](/project/roadmap). Until these ship, ask an SCF operator.
+</Note>
+
+{/* TODO: give milestones for project-level CSV export and tracker upgrade notices. project/roadmap.mdx lists CSV export only for the operator dashboard (Milestone 2) and does not list upgrade notices. */}
+
+{/* TODO: document how a project owner adds team members. Settings lists members but the dashboard has no invite flow, and Umami's own UI is not reachable from the internet. */}

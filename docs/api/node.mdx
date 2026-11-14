@@ -1,0 +1,256 @@
+---
+title: "Node.js"
+description: "Send API metrics from an Express or NestJS service with a second OpenTelemetry span exporter, next to the APM you already use."
+icon: "hexagon"
+---
+
+This guide adds a second span exporter to the OpenTelemetry Node SDK. Your current exporter keeps sending full traces to your APM. The new one sends the same spans to Lumenstat, which keeps only counts, status codes and latency per route. The setup is the one in [`examples/test-api`](https://github.com/boundlessfi/lumenstat/blob/main/examples/test-api/src/instrument.cjs), which the repository uses to test the API path end to end.
+
+<Steps>
+  <Step title="Issue an ingest key">
+    Issue a key on your project's **Setup** page, as described in [Issue an ingest key](/api/overview#issue-an-ingest-key). Make it available to your service as an environment variable:
+
+    ```bash
+    LUMENSTAT_INGEST_KEY=scf_ingest_...
+    ```
+
+    The variable name is yours to choose. Lumenstat only sees the header value.
+  </Step>
+  <Step title="Install the packages">
+    <CodeGroup>
+      ```bash Express
+      npm install @opentelemetry/sdk-node @opentelemetry/sdk-trace \
+        @opentelemetry/exporter-trace-otlp-http \
+        @opentelemetry/instrumentation-http @opentelemetry/instrumentation-express
+      ```
+
+      ```bash NestJS
+      npm install @opentelemetry/sdk-node @opentelemetry/sdk-trace \
+        @opentelemetry/exporter-trace-otlp-http \
+        @opentelemetry/instrumentation-http @opentelemetry/instrumentation-express \
+        @opentelemetry/instrumentation-nestjs-core
+      ```
+    </CodeGroup>
+
+    The example pins `@opentelemetry/sdk-node` 0.300.0, `@opentelemetry/sdk-trace` 3.0.0, `@opentelemetry/exporter-trace-otlp-http` 0.300.0, `@opentelemetry/instrumentation-http` 0.300.0 and `@opentelemetry/instrumentation-express` 0.72.0.
+
+    <Tip>
+      On an older SDK that uses `@opentelemetry/sdk-trace-base` 1.x or 2.x, the processor takes the exporter as its first argument: `new BatchSpanProcessor(exporter)`. Everything else on this page is the same.
+    </Tip>
+  </Step>
+  <Step title="Add the second exporter">
+    Create `instrument.cjs`. Replace the first processor's exporter with the one you use today.
+
+    <Tabs>
+      <Tab title="Express">
+        ```js instrument.cjs
+        // Load before the app: node --require ./instrument.cjs server.js
+
+        // Lumenstat builds request metrics from spans. Without these defaults the SDK
+        // also exports its own metrics and logs over OTLP, without the ingest key.
+        process.env.OTEL_METRICS_EXPORTER ??= 'none';
+        process.env.OTEL_LOGS_EXPORTER ??= 'none';
+
+        const { NodeSDK } = require('@opentelemetry/sdk-node');
+        const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace');
+        const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-http');
+        const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
+        const { ExpressInstrumentation } = require('@opentelemetry/instrumentation-express');
+
+        const ingestKey = process.env.LUMENSTAT_INGEST_KEY ?? '';
+        if (!ingestKey) {
+          console.warn('[otel] LUMENSTAT_INGEST_KEY is empty: Lumenstat will accept the spans and then drop them.');
+        }
+
+        const sdk = new NodeSDK({
+          serviceName: process.env.OTEL_SERVICE_NAME ?? 'my-api',
+          spanProcessors: [
+            // Export 1: your APM, unchanged. Use the exporter you have today.
+            new BatchSpanProcessor({
+              exporter: new OTLPTraceExporter({
+                url: 'https://otlp.apm.example.com/v1/traces',
+                headers: { 'api-key': process.env.APM_API_KEY ?? '' },
+              }),
+            }),
+            // Export 2: Lumenstat. Only counts and latency per route are kept.
+            new BatchSpanProcessor({
+              exporter: new OTLPTraceExporter({
+                url: 'https://otlp.lumenstat.com/v1/traces',
+                headers: { 'x-scf-ingest-key': ingestKey },
+              }),
+            }),
+          ],
+          // ExpressInstrumentation records the matched route, which becomes http.route.
+          instrumentations: [new HttpInstrumentation(), new ExpressInstrumentation()],
+        });
+
+        sdk.start();
+
+        // Flush buffered spans before the process exits.
+        process.on('SIGTERM', () => {
+          sdk.shutdown().finally(() => process.exit(0));
+        });
+        ```
+      </Tab>
+      <Tab title="NestJS">
+        ```js instrument.cjs
+        // Load before the app: node --require ./instrument.cjs dist/main.js
+
+        // Lumenstat builds request metrics from spans. Without these defaults the SDK
+        // also exports its own metrics and logs over OTLP, without the ingest key.
+        process.env.OTEL_METRICS_EXPORTER ??= 'none';
+        process.env.OTEL_LOGS_EXPORTER ??= 'none';
+
+        const { NodeSDK } = require('@opentelemetry/sdk-node');
+        const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace');
+        const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-http');
+        const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
+        const { ExpressInstrumentation } = require('@opentelemetry/instrumentation-express');
+        const { NestInstrumentation } = require('@opentelemetry/instrumentation-nestjs-core');
+
+        const ingestKey = process.env.LUMENSTAT_INGEST_KEY ?? '';
+        if (!ingestKey) {
+          console.warn('[otel] LUMENSTAT_INGEST_KEY is empty: Lumenstat will accept the spans and then drop them.');
+        }
+
+        const sdk = new NodeSDK({
+          serviceName: process.env.OTEL_SERVICE_NAME ?? 'my-api',
+          spanProcessors: [
+            // Export 1: your APM, unchanged. Use the exporter you have today.
+            new BatchSpanProcessor({
+              exporter: new OTLPTraceExporter({
+                url: 'https://otlp.apm.example.com/v1/traces',
+                headers: { 'api-key': process.env.APM_API_KEY ?? '' },
+              }),
+            }),
+            // Export 2: Lumenstat. Only counts and latency per route are kept.
+            new BatchSpanProcessor({
+              exporter: new OTLPTraceExporter({
+                url: 'https://otlp.lumenstat.com/v1/traces',
+                headers: { 'x-scf-ingest-key': ingestKey },
+              }),
+            }),
+          ],
+          instrumentations: [
+            new HttpInstrumentation(),
+            // Nest's default platform is Express: this names the route on the server span.
+            new ExpressInstrumentation(),
+            // Controller and handler spans for your APM. Lumenstat ignores them.
+            new NestInstrumentation(),
+          ],
+        });
+
+        sdk.start();
+
+        // Flush buffered spans before the process exits.
+        process.on('SIGTERM', () => {
+          sdk.shutdown().finally(() => process.exit(0));
+        });
+        ```
+      </Tab>
+    </Tabs>
+
+    <Warning>
+      `spanProcessors` replaces `traceExporter` and the `OTEL_TRACES_EXPORTER` variable. If your setup used `traceExporter: yourExporter`, move that exporter into the array as shown, or your APM stops receiving traces.
+    </Warning>
+  </Step>
+  <Step title="Load it before your app">
+    The file must run before Express or Nest is required, so the instrumentations can patch them.
+
+    <CodeGroup>
+      ```bash Express
+      node --require ./instrument.cjs server.js
+      ```
+
+      ```bash NestJS
+      node --require ./instrument.cjs dist/main.js
+      ```
+
+      ```bash Any start command
+      NODE_OPTIONS="--require ./instrument.cjs" npm start
+      ```
+    </CodeGroup>
+
+    <Warning>
+      `--require` hooks CommonJS `require` calls. If your app loads Express as an ES module, the Express instrumentation does not patch it unless you also register OpenTelemetry's ESM loader hook. Without it, server spans carry no `http.route` and Lumenstat falls back to the raw path.
+    </Warning>
+  </Step>
+  <Step title="Confirm data is arriving">
+    Send a few requests to your service, wait about a minute, then reload **Setup**. See [Confirm data is arriving](#confirm-data-is-arriving) below.
+  </Step>
+</Steps>
+
+## Why metrics and logs are set to none
+
+When `NodeSDK` gets no metric readers or log processors in code, it reads `OTEL_METRICS_EXPORTER` and `OTEL_LOGS_EXPORTER`, and both default to `otlp`. The SDK would then export its own metrics every 60 seconds, and any OpenTelemetry logs, to `OTEL_EXPORTER_OTLP_ENDPOINT`, or to `http://localhost:4318` when that is unset. Those exports carry no ingest key. Lumenstat does not need them: the collector builds request metrics from your spans.
+
+The `??=` operator keeps any value you already set. If your APM receives metrics or logs through these variables, keep your settings. They go to your APM's endpoint, not to Lumenstat.
+
+Set both lines before `new NodeSDK()`. The SDK reads the metrics variable in its constructor.
+
+## Keep the two exporters apart
+
+The Node OTLP exporters merge `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` into every exporter they build, including ones you configure in code. In a dual-export setup:
+
+- Do not set `OTEL_EXPORTER_OTLP_TRACES_HEADERS` to the ingest key, as the **Copy settings** lines on Setup do. Your APM would receive your Lumenstat key.
+- Do not keep APM credentials in `OTEL_EXPORTER_OTLP_HEADERS`. Lumenstat would receive them. Pass them in code on the APM exporter, as in the example.
+
+The Setup lines are meant for a service whose only exporter is Lumenstat. See [Use SDK environment variables](/api/collector#use-sdk-environment-variables).
+
+## Get the best routes with http.route
+
+Lumenstat names routes from the `http.route` attribute on the server span when it is present, and normalizes the raw path only when it is not. A route template is the best name a request can have.
+
+- **Express.** The Express instrumentation records the route that matched, and the HTTP instrumentation writes it to `http.route` on the server span. With `app.get('/accounts/:account', ...)`, a request to `/accounts/GA5Y…` is counted as `GET /accounts/:account`.
+- **NestJS.** On Nest's default Express platform, Nest registers each controller route on Express, so the Express instrumentation names it the same way. A handler with `@Get(':account')` in `@Controller('accounts')` is counted as `/accounts/:account`. The Nest instrumentation adds controller spans for your APM. Lumenstat ignores them because they are not server spans.
+- **Nest on Fastify, or a plain `node:http` server.** The Express instrumentation does not apply, and the server span carries only the raw path. Lumenstat then applies its [normalization rules](/api/routes), which handle Stellar addresses, ids, hashes and tokens.
+
+{/* TODO: verify the NestJS path end to end with a sample Nest app; examples/test-api exercises Express only. */}
+
+To name routes yourself on a server without a router, set the attribute on the active span. The HTTP instrumentation runs your handler inside the server span, and it leaves an `http.route` you set in place. This needs `@opentelemetry/api`.
+
+```js
+const http = require('node:http');
+const { trace } = require('@opentelemetry/api');
+
+http.createServer((req, res) => {
+  if (req.url.startsWith('/legacy/accounts/')) {
+    trace.getActiveSpan()?.setAttribute('http.route', '/legacy/accounts/:account');
+  }
+  // ...
+});
+```
+
+## Confirm data is arriving
+
+Open **Setup** in the dashboard. The **Is data arriving?** card has an **API** line:
+
+| It says | Meaning |
+| --- | --- |
+| `N requests in the last 24 hours` | Data is arriving. |
+| `connected, waiting for traffic` | Your project has an API tenant, but no requests were stored in the last 24 hours. |
+| `not connected` | No ingest key has been issued for this project. |
+| `status unavailable` | The dashboard could not reach the metrics store. Try again in a minute. |
+
+The check runs when the page loads, so reload it. The SDK's batch processor exports every 5 seconds by default and the collector flushes aggregates every 15 seconds, so allow up to a minute after the first request. Then open **API** to see each route with its requests, status codes and latency.
+
+<AccordionGroup>
+  <Accordion title="Setup still says connected, waiting for traffic">
+    - Check that `LUMENSTAT_INGEST_KEY` reaches the process. With an empty or wrong key the collector still answers with success and the writer drops the data, so nothing fails visibly.
+    - Check that the service can reach `https://otlp.lumenstat.com` on port 443.
+    - Start the service with `OTEL_LOG_LEVEL=debug` to print exporter errors.
+    - Make sure the requests reach an instrumented HTTP server. Only server spans are counted.
+  </Accordion>
+  <Accordion title="My APM stopped receiving traces">
+    `spanProcessors` replaces `traceExporter` and `OTEL_TRACES_EXPORTER`. Put your APM exporter in the `spanProcessors` array next to the Lumenstat one.
+  </Accordion>
+  <Accordion title="Logs show connection errors to localhost:4318">
+    The SDK is exporting metrics or logs with its defaults. Set `OTEL_METRICS_EXPORTER=none` and `OTEL_LOGS_EXPORTER=none` before `new NodeSDK()`, or point those exporters at your APM.
+  </Accordion>
+  <Accordion title="Routes show raw paths or {unknown}">
+    The server spans have no `http.route`. Check that the Express instrumentation is registered and that the app loads Express through `require`. `{unknown}` means the span had no route or path attribute at all.
+  </Accordion>
+  <Accordion title="Request counts are lower than my access logs">
+    A sampler such as `OTEL_TRACES_SAMPLER=traceidratio` applies to both exporters, so Lumenstat sees only the sampled requests. Keep the SDK unsampled and sample in a Collector pipeline that feeds only your APM. See [Send only what Lumenstat reads](/api/collector#send-only-what-lumenstat-reads).
+  </Accordion>
+</AccordionGroup>

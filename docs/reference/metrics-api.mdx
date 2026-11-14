@@ -1,0 +1,320 @@
+---
+title: "Metrics API"
+description: "The writer's read-only JSON API for stored API metrics: per-project totals and per-route requests, status codes and latency."
+icon: "braces"
+---
+
+The writer serves a read-only JSON API over the API metrics it stores: totals per project and a breakdown per route. The dashboard reads your API numbers through it. The writer has no public hostname: on the hosted service you read these numbers in the dashboard. The API itself is for self-hosters and for operators with access to the stack.
+
+## Base URL
+
+The writer is not on a public hostname. The Cloudflare Tunnel routes only `app.`, `t.` and `otlp.`, and `otlp.` only to the collector. The dashboard calls the writer over the stack's private network with an operator key and filters the results to your project on its server before anything reaches your browser.
+
+| Where | Base URL |
+| --- | --- |
+| Inside the production Compose stack | `http://writer:8080` |
+| Local development (`docker-compose.yml` in the repository root) | `http://localhost:8090` |
+| Hosted Lumenstat | No public URL. Use the **API** page in the dashboard. |
+
+The examples use `$WRITER_URL` for the base URL. The writer listens on the port in its `PORT` variable, 8080 by default.
+
+{/* TODO: add a public base URL here if the metrics API is ever routed publicly; deploy/README.md and infra/opentofu route only app., t. and otlp. today. */}
+
+## Authentication
+
+Every request needs a read key in the `Authorization` header:
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer` followed by a space and the read key, for example `Bearer scf_read_...`. The scheme is case-sensitive: write `Bearer` with a capital B.
+</ParamField>
+
+A read key has one of two scopes:
+
+| Scope | Created with | Sees |
+| --- | --- | --- |
+| Operator | `key:create` without `--tenant`, or the `SCF_BOOTSTRAP_OPERATOR_KEY` variable | Every tenant |
+| Tenant | `key:create --tenant <tenant id>` | Its own tenant only. Any other tenant ID returns 404, the same as one that does not exist. |
+
+Read keys start with `scf_read_`, are shown once and are stored only as SHA-256 hashes. Each use updates the key's `last_used_at`. Issue and revoke them with the writer's CLI, from `apps/writer`:
+
+```bash
+npm run key:create -- --label "<who it is for>" [--tenant <tenant id>] [--days <n>]
+npm run key:revoke -- <api key id>
+```
+
+`key:create` prints one JSON line with `apiKeyId`, `scope`, `tenantId`, `expiresAt` and `key`. `--days` sets an expiry. Without it the key does not expire.
+
+`SCF_BOOTSTRAP_OPERATOR_KEY` is an operator key held in the writer's environment instead of the database. It is used only when it is at least 16 characters long, and it is compared with `timingSafeEqual`.
+
+<Note>
+  Issuing and revoking read keys from the dashboard's **Keys and health** page is planned for Milestone 2. See the [roadmap](/project/roadmap).
+</Note>
+
+The writer also has an operator-only control API under `/v1/admin/`, which the dashboard uses for tenants, ingest keys and enrollment. It is not covered here.
+
+## Time range
+
+Both endpoints take the same query parameters.
+
+<ParamField query="range" type="string" default="24h">
+  One of `1h`, `24h`, `7d` or `30d`. The window ends at `to`. An unrecognized value is treated as `24h`. Ignored when `from` is set.
+</ParamField>
+
+<ParamField query="from" type="string">
+  Start of the window, inclusive, as an ISO 8601 timestamp such as `2026-11-06T00:00:00Z`. Defaults to `to` minus `range`.
+</ParamField>
+
+<ParamField query="to" type="string">
+  End of the window, exclusive, as an ISO 8601 timestamp. Defaults to now.
+</ParamField>
+
+`from` must be earlier than `to`, and the window can be at most 800 days. Rows are per UTC minute, and a row is included when its minute starts inside the window.
+
+## List tenants
+
+`GET /v1/api-metrics/tenants`
+
+Totals per tenant for the window. An operator key gets every tenant, including tenants with no data in the window, sorted by requests, most first, then by name. A tenant key gets a list with its own tenant only.
+
+```bash
+curl -s "$WRITER_URL/v1/api-metrics/tenants?range=7d" \
+  -H "Authorization: Bearer $LUMENSTAT_READ_KEY"
+```
+
+```json Response
+{
+  "scope": "operator",
+  "from": "2026-11-06T12:00:00.000Z",
+  "to": "2026-11-13T12:00:00.000Z",
+  "tenants": [
+    {
+      "tenantId": "0b6f3c2e-8a41-4d3b-9f57-2c1e7a9d4b10",
+      "name": "Example API",
+      "status": "active",
+      "umamiTeamId": "5d2a7e91-3c4b-4f8e-a6d2-9b1c0e7f3a55",
+      "services": 2,
+      "routes": 14,
+      "requests": 182500,
+      "errorRate": 0.002,
+      "p50Ms": 41.7,
+      "p95Ms": 236.2
+    },
+    {
+      "tenantId": "7c1d9e40-2b6a-4f3e-8d15-a0e4c7b29f61",
+      "name": "Another project",
+      "status": "active",
+      "umamiTeamId": null,
+      "services": 0,
+      "routes": 0,
+      "requests": 0,
+      "errorRate": null,
+      "p50Ms": null,
+      "p95Ms": null
+    }
+  ]
+}
+```
+
+<ResponseField name="scope" type="string">
+  `operator` or `tenant`: the scope of the key that made the request.
+</ResponseField>
+
+<ResponseField name="from" type="string">
+  Start of the window that was used, ISO 8601.
+</ResponseField>
+
+<ResponseField name="to" type="string">
+  End of the window that was used, ISO 8601.
+</ResponseField>
+
+<ResponseField name="tenants" type="object[]">
+  One entry per tenant.
+
+  <Expandable title="tenant fields">
+    <ResponseField name="tenantId" type="string">
+      Tenant UUID.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Tenant name, normally the project name.
+    </ResponseField>
+    <ResponseField name="status" type="string">
+      `active` or `suspended`. Data sent with a suspended tenant's ingest keys is dropped.
+    </ResponseField>
+    <ResponseField name="umamiTeamId" type="string | null">
+      The Umami team of the project this tenant belongs to, so web and API numbers can be matched. `null` if the tenant is not linked.
+    </ResponseField>
+    <ResponseField name="services" type="number">
+      Distinct `service.name` values with data in the window.
+    </ResponseField>
+    <ResponseField name="routes" type="number">
+      Distinct service and route pairs with data in the window.
+    </ResponseField>
+    <ResponseField name="requests" type="number">
+      Requests in the window.
+    </ResponseField>
+    <ResponseField name="errorRate" type="number | null">
+      Share of requests with a 5xx status, from 0 to 1, not rounded. `null` when `requests` is 0.
+    </ResponseField>
+    <ResponseField name="p50Ms" type="number | null">
+      Median latency in milliseconds, rounded to 0.1. `null` without data.
+    </ResponseField>
+    <ResponseField name="p95Ms" type="number | null">
+      95th percentile latency in milliseconds, rounded to 0.1. `null` without data.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## List routes
+
+`GET /v1/api-metrics/tenants/:id/routes`
+
+Requests, status codes and latency per service, method and route for one tenant. Status codes are summed into classes. At most 500 rows are returned, sorted by requests, most first. Routes with no requests in the window are not listed.
+
+<ParamField path="id" type="string" required>
+  Tenant UUID in lower case. Any other form returns 404 `not found`.
+</ParamField>
+
+```bash
+curl -s "$WRITER_URL/v1/api-metrics/tenants/0b6f3c2e-8a41-4d3b-9f57-2c1e7a9d4b10/routes?from=2026-11-12T00:00:00Z&to=2026-11-13T00:00:00Z" \
+  -H "Authorization: Bearer $LUMENSTAT_READ_KEY"
+```
+
+```json Response
+{
+  "tenant": {
+    "tenantId": "0b6f3c2e-8a41-4d3b-9f57-2c1e7a9d4b10",
+    "name": "Example API",
+    "status": "active",
+    "umamiTeamId": "5d2a7e91-3c4b-4f8e-a6d2-9b1c0e7f3a55"
+  },
+  "from": "2026-11-12T00:00:00.000Z",
+  "to": "2026-11-13T00:00:00.000Z",
+  "routes": [
+    {
+      "service": "payments-api",
+      "method": "GET",
+      "route": "/accounts/:account",
+      "requests": 96210,
+      "status": { "2xx": 95874, "3xx": 0, "4xx": 301, "5xx": 35, "other": 0 },
+      "avgMs": 52.3,
+      "p50Ms": 38.9,
+      "p95Ms": 171.4,
+      "p99Ms": 402.8
+    },
+    {
+      "service": "payments-api",
+      "method": "GET",
+      "route": "/legacy/accounts/{account}/balance",
+      "requests": 20480,
+      "status": { "2xx": 20410, "3xx": 0, "4xx": 70, "5xx": 0, "other": 0 },
+      "avgMs": 18.6,
+      "p50Ms": 14.2,
+      "p95Ms": 46.5,
+      "p99Ms": 88.1
+    },
+    {
+      "service": "payments-api",
+      "method": "POST",
+      "route": "/bounties/:id/submissions",
+      "requests": 3125,
+      "status": { "2xx": 3090, "3xx": 0, "4xx": 21, "5xx": 14, "other": 0 },
+      "avgMs": 121.7,
+      "p50Ms": 96.4,
+      "p95Ms": 238.4,
+      "p99Ms": 611.3
+    }
+  ]
+}
+```
+
+<ResponseField name="tenant" type="object">
+  The tenant the routes belong to.
+
+  <Expandable title="tenant fields">
+    <ResponseField name="tenantId" type="string">
+      Tenant UUID.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Tenant name.
+    </ResponseField>
+    <ResponseField name="status" type="string">
+      `active` or `suspended`.
+    </ResponseField>
+    <ResponseField name="umamiTeamId" type="string | null">
+      Linked Umami team, or `null`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="from" type="string">
+  Start of the window that was used, ISO 8601.
+</ResponseField>
+
+<ResponseField name="to" type="string">
+  End of the window that was used, ISO 8601.
+</ResponseField>
+
+<ResponseField name="routes" type="object[]">
+  One entry per service, method and route.
+
+  <Expandable title="route fields">
+    <ResponseField name="service" type="string">
+      The `service.name` that reported the requests.
+    </ResponseField>
+    <ResponseField name="method" type="string">
+      HTTP method in upper case, or `_OTHER` if the span had none.
+    </ResponseField>
+    <ResponseField name="route" type="string">
+      The route after [normalization](/api/routes). Can be `{unknown}` or `{other}`.
+    </ResponseField>
+    <ResponseField name="requests" type="number">
+      Requests in the window.
+    </ResponseField>
+    <ResponseField name="status" type="object">
+      Requests by status class. `2xx` counts codes 200 to 299, and so on up to `5xx` for 500 to 599. `other` is every remaining request, such as status `0` when the span had no status code, or a 1xx code.
+    </ResponseField>
+    <ResponseField name="avgMs" type="number | null">
+      Mean latency in milliseconds: total duration divided by requests, rounded to 0.1.
+    </ResponseField>
+    <ResponseField name="p50Ms" type="number | null">
+      Median latency in milliseconds, rounded to 0.1.
+    </ResponseField>
+    <ResponseField name="p95Ms" type="number | null">
+      95th percentile latency in milliseconds, rounded to 0.1.
+    </ResponseField>
+    <ResponseField name="p99Ms" type="number | null">
+      99th percentile latency in milliseconds, rounded to 0.1.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## How the numbers are computed
+
+- **One source per service.** For each service, if any rows in the window came from SDK metrics, only those rows are used. Otherwise the rows built from spans are used. A service that sends both is never counted twice.
+- **Percentiles.** Bucket counts are summed over the window and across instances, then p50, p95 and p99 are interpolated linearly inside the bucket that holds the rank. A percentile in the overflow bucket, above 10 seconds, reads `10000`. See [Histogram buckets](/reference/otlp-ingest#histogram-buckets).
+- **Error rate.** `errorRate` counts status codes of 500 and above. 4xx responses are not errors here.
+
+## Errors
+
+Errors are JSON with one field:
+
+```json
+{ "error": "invalid or revoked key" }
+```
+
+| Status | `error` | When |
+| --- | --- | --- |
+| 400 | `invalid time range` | `from` or `to` cannot be parsed, or `from` is not earlier than `to` |
+| 400 | `time range too long` | The window is longer than 800 days |
+| 401 | `missing bearer key` | No `Authorization: Bearer` header |
+| 401 | `invalid or revoked key` | The key is unknown, revoked or expired |
+| 404 | `tenant not found` | No such tenant, or a tenant key asked for another tenant |
+| 404 | `not found` | Any other path or method, including a tenant ID that is not a lower-case UUID |
+| 503 | `temporarily unavailable` | An unexpected server error |
+
+Authentication runs before the time range is checked, so a request with a bad key and a bad range returns 401. Every response carries `cache-control: no-store`.
+
+## Other writer endpoints
+
+- `GET /healthz` returns `{"ok":true}` after a database round trip. It needs no key.
+- `GET /dashboard` serves a single HTML page that calls the two endpoints above with a read key you paste in. The page keeps the key in the browser's session storage. It is meant for self-hosters and local development.

@@ -1,0 +1,62 @@
+---
+title: "Changelog"
+description: "Every change to the Lumenstat service and tracker, newest first."
+icon: "history"
+rss: true
+---
+
+The service deploys from `main`, so an entry here means it is live at [app.lumenstat.com](https://app.lumenstat.com). Tracker versions are listed separately in [Tracker releases](/reference/tracker-releases), because a published tracker never changes.
+
+<Update
+  label="13 November 2026"
+  description="Milestone 1 pilot"
+  tags={["Web", "Integrity", "Tracker", "API", "Dashboard", "Infrastructure"]}
+  rss={{
+    title: "Lumenstat pilot is live",
+    description: "Privacy-first web analytics with four layers of bot defense, tracker 1.0.0 with SRI, self-service enrollment, API analytics from OpenTelemetry, and the project and operator dashboard.",
+    date: "2026-11-13"
+  }}
+>
+  ## The pilot is live
+
+  Lumenstat now runs at [app.lumenstat.com](https://app.lumenstat.com), and any Stellar project can enroll itself.
+
+  ### Web analytics
+
+  - Umami v3.5.0 with four privacy patches, each behind its own switch: country-only geography from IPs cut to /24 or /48, caller-supplied IP and user agent ignored, query strings stripped except `utm_*`, and a random session salt per day that is deleted after 48 hours.
+  - No cookies, nothing written to the visitor's device, and no IP addresses stored.
+
+  ### Bot and inflation defense
+
+  - Four layers: a real browser on the site's own domain, proof of JavaScript, data-center IP ranges, and a limit on new visitors per network per hour.
+  - Events that fail are stored as flagged, with their reasons, and never counted. Projects see them on the **Website** page, and operators on **Traffic quality**.
+  - About 8,900 published cloud and hosting ranges, rebuilt from the providers' own lists.
+
+  ### Tracker 1.0.0
+
+  - Served at `https://t.lumenstat.com/v/1.0.0/l.js` with a one-year immutable cache and a published SHA-384 integrity hash.
+  - Rebuilds byte for byte from source, checked in CI and on every deploy.
+  - Collects at `/e`, a path ad blockers do not target.
+
+  ### Enrollment
+
+  - Self-service sign-up with project name, domains and one Stellar link: an SCF project page, an explorer page, or an account checked on Horizon mainnet.
+  - Open, approval and closed modes, with a daily cap, and an operator approval queue.
+
+  ### API analytics
+
+  - Projects issue their own ingest key and add a second OpenTelemetry exporter.
+  - The collector keeps request counts, status codes and latency per route, then drops every span, trace and log.
+  - Routes are normalized: checksum-valid Stellar addresses, ids, hashes and tokens become placeholders.
+
+  ### Dashboard
+
+  - Built with the Stellar Design System. Projects get Overview, Website, API, Setup and Settings. SCF operators get All projects, Compare, Traffic quality, Enrollment, and Keys and health.
+
+  ### Infrastructure and open source
+
+  - One host in the EU with no published ports, reached only through a Cloudflare Tunnel. DNSSEC and strict TLS.
+  - OpenTofu and Ansible for staging and production.
+  - MIT license, a security policy, a draft privacy statement for counsel review, and CI with every action pinned by commit SHA.
+  - These docs.
+</Update>

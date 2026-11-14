@@ -1,0 +1,139 @@
+---
+title: "Tracker releases"
+description: "Every published tracker version with its URL, size and integrity hash, and how a release is built, checked and shipped."
+icon: "tag"
+---
+
+Each tracker version is a fixed file at its own URL. Pin the version and its `integrity` hash in your snippet, and the browser runs exactly those bytes or nothing. A released version never changes: a fix ships as a new version, and you upgrade by changing the URL and the hash.
+
+## Releases
+
+| Version | URL | Bytes | Integrity | Umami base | Released |
+| --- | --- | --- | --- | --- | --- |
+| 1.0.0 | `https://t.lumenstat.com/v/1.0.0/l.js` | 10,447 | `sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3` | v3.5.0 | 2026-11-13 |
+
+The source of truth is [`packages/tracker/releases.json`](https://github.com/boundlessfi/lumenstat/blob/main/packages/tracker/releases.json). The file itself is committed as [`packages/tracker/releases/1.0.0.js`](https://github.com/boundlessfi/lumenstat/blob/main/packages/tracker/releases/1.0.0.js).
+
+```html Snippet for 1.0.0
+<script
+  defer
+  src="https://t.lumenstat.com/v/1.0.0/l.js"
+  integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+  crossorigin="anonymous"
+  data-website-id="YOUR-WEBSITE-ID"
+></script>
+```
+
+Check the served file against its hash. The output must equal the part after `sha384-`:
+
+<CodeGroup>
+```bash Served file
+curl -s https://t.lumenstat.com/v/1.0.0/l.js | openssl dgst -sha384 -binary | openssl base64 -A
+```
+
+```bash Committed file
+openssl dgst -sha384 -binary packages/tracker/releases/1.0.0.js | openssl base64 -A
+```
+</CodeGroup>
+
+## Release policy
+
+- **Immutable.** `packages/tracker/releases/<version>.js` is never edited. The build refuses to overwrite a release whose bytes would change, and a `releases.json` entry is written once and never updated.
+- **Fixes ship as new versions.** This includes security fixes. Earlier versions stay online at their URLs.
+- **Cached for a year.** Files under `/v/` are served with `Cache-Control: public, max-age=31536000, immutable` and `Access-Control-Allow-Origin: *`.
+- **One URL shape.** Releases are served at `/v/<major>.<minor>.<patch>/l.js`. The tunnel route for `t.` allows only digits in the three parts, so a pre-release version such as `1.1.0-beta.1` would not be reachable.
+- **Upgrades are deliberate.** Nothing changes in your pages until you change the version and the hash yourself.
+
+The integrity hash makes the browser refuse a modified file. It does not stop anyone from removing the script tag or embedding a copy without the `integrity` attribute.
+
+## How a release is built
+
+<Steps>
+  <Step title="Change the tracker source">
+    The tracker is `src/tracker/index.ts` and `src/tracker/pow.ts` in `vendor/umami`. Changes to Umami live as patches in `patches/umami`. After editing `vendor/umami`, write them back:
+
+    ```bash
+    scripts/export-umami-patches.sh
+    ```
+  </Step>
+
+  <Step title="Bump the version">
+    Set the new `version` in [`packages/tracker/package.json`](https://github.com/boundlessfi/lumenstat/blob/main/packages/tracker/package.json). The build uses this version, and the tag must match it.
+  </Step>
+
+  <Step title="Build">
+    ```bash
+    node scripts/build-tracker.mjs
+    ```
+
+    [`scripts/build-tracker.mjs`](https://github.com/boundlessfi/lumenstat/blob/main/scripts/build-tracker.mjs) runs Umami's Rollup config (`rollup.tracker.config.js`) through `pnpm@12.3.4`, with the collect host and path from the `lumenstat` field of `package.json` (`https://t.lumenstat.com` and `/e`) built in. It then writes:
+
+    | File | Content |
+    | --- | --- |
+    | `packages/tracker/releases/<version>.js` | The file served at `/v/<version>/l.js`. Never edited after this. |
+    | `packages/tracker/releases.json` | A new entry: `url`, `integrity` (SHA-384, base64), `bytes`, `umami` (the Umami tag from `git describe` in `vendor/umami`), `released` (UTC date). |
+    | `packages/tracker/dist/l.js` | The same bytes, for the npm package. |
+
+    It prints the size, the hash and a ready snippet.
+  </Step>
+
+  <Step title="Commit and let CI check it">
+    CI rebuilds the tracker from a clean checkout and compares it byte for byte with the committed file. See the table below.
+  </Step>
+
+  <Step title="Tag the release">
+    ```bash
+    git tag tracker-v<version> && git push origin tracker-v<version>
+    ```
+
+    The tag triggers [`.github/workflows/release-tracker.yml`](https://github.com/boundlessfi/lumenstat/blob/main/.github/workflows/release-tracker.yml), which publishes the GitHub release and the npm package.
+  </Step>
+
+  <Step title="Deploy">
+    `deploy/deploy.sh` checks the build again and copies every release into Umami's public folder, so the new version is served at its URL. See [Self-hosting](/self-hosting/overview).
+  </Step>
+</Steps>
+
+## How a release is checked
+
+`node scripts/build-tracker.mjs --check` rebuilds the version in `packages/tracker/package.json` and compares it byte for byte with `packages/tracker/releases/<version>.js`. It writes nothing. It exits with an error when the bytes differ or when the release file does not exist.
+
+| Where | When | What runs |
+| --- | --- | --- |
+| [`ci.yml`](https://github.com/boundlessfi/lumenstat/blob/main/.github/workflows/ci.yml), job "Umami patches and tracker release" | Every push to `main` and every pull request | `scripts/sync-umami.sh` (Umami v3.5.0 plus the patches), `pnpm install --frozen-lockfile`, the SCF patch tests, the tracker type check, then `build-tracker.mjs --check` |
+| [`release-tracker.yml`](https://github.com/boundlessfi/lumenstat/blob/main/.github/workflows/release-tracker.yml) | A pushed tag `tracker-v*` | The tag must equal `tracker-v` plus the package version. Then the same sync, install and `--check`, the release notes, the GitHub release with the file attached, and `npm publish --provenance --access public` |
+| [`deploy/deploy.sh`](https://github.com/boundlessfi/lumenstat/blob/main/deploy/deploy.sh) and the Ansible `lumenstat` role | Every deploy, before anything is copied to the server | `build-tracker.mjs --check`, then `scripts/stage-tracker-releases.sh` |
+
+[`scripts/stage-tracker-releases.sh`](https://github.com/boundlessfi/lumenstat/blob/main/scripts/stage-tracker-releases.sh) copies every `packages/tracker/releases/<version>.js` to `vendor/umami/public/v/<version>/l.js`, which the Umami image serves. `scripts/sync-umami.sh` runs it too.
+
+<Note>
+  `--check` covers the current version only. Earlier releases are served from their committed files and pinned by their hashes in `releases.json`. They are not rebuilt, because their source is an earlier commit.
+</Note>
+
+The GitHub release for each version is named "Tracker `<version>`" and carries the size, the Umami base, the URL, the integrity hash, a snippet and the `curl` command above.
+
+## npm package
+
+`@lumenstat/tracker` contains `dist/l.js`, `releases.json` and the README. Its exports are `.` and `./l.js` (the tracker) and `./releases.json`. `dist/l.js` is copied from `releases/<version>.js` when the package is packed, so it has the same bytes and hash as the hosted file. The release workflow publishes it with npm provenance, so the package links to the commit and workflow run that built it.
+
+<Note>
+  The first npm publish of `@lumenstat/tracker` is pending (Milestone 1). Until then, use the hosted file.
+</Note>
+
+To serve the file from your own domain, see [Self-host the tracker](/web/self-host-the-tracker). The copy still sends events to `https://t.lumenstat.com` unless you set [`data-host-url`](/reference/tracker-attributes#core).
+
+## How projects learn about upgrades
+
+- **Setup page.** The snippet on your project's **Setup** page uses the version the operator pins with `TRACKER_VERSION`. Its integrity hash is computed from the bytes the server serves. Snippets you already embedded keep their version.
+- **GitHub releases.** Each version gets a release from the tag `tracker-v<version>` with its URL, hash and check command. Watch the repository's releases to be notified.
+- **`releases.json`.** The full list of versions, in the repository and in the npm package.
+- **Changelog.** Tracker releases are listed in the [changelog](/project/changelog).
+- **Security fixes.** The [security policy](/trust/security-policy) says enrolled projects are told to upgrade when a tracker fix ships.
+
+{/* TODO: name the channel used to tell enrolled projects about a security fix (email to the owner address from enrollment?). Not stated in the repository. */}
+
+<Note>
+  **Planned:** upgrade notices in the dashboard. The project Settings page lists them as planned for the next milestones.
+</Note>
+
+{/* TODO: confirm the milestone for dashboard upgrade notices. apps/dashboard settings page says "planned for the next milestones" without naming one. */}
