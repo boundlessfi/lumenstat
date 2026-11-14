@@ -1,0 +1,994 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Collins Ikechukwu <collinschristroa@gmail.com>
+Date: Fri, 13 Nov 2026 14:02:45 +0100
+Subject: [PATCH 4/5] scf: flag suspect traffic instead of counting it (bot
+ layers 1 to 4)
+
+Events that fail any check are stored in scf_flagged_event, apart from
+website_event, so Umami's reports never count them while operators can
+see who is being inflated and how. Each layer has its own switch:
+
+1. Real browser (SCF_ENFORCE_ORIGIN): Origin matches the site's domains
+   and Fetch Metadata headers are present. Replaces the Redis-only
+   rejection counters.
+2. Proof of JavaScript (SCF_POW_BITS): the tracker finds a nonce so that
+   sha256(website:slot:url:nonce) starts with N zero bits, slot being the
+   10-minute window, and sends it in x-lumenstat-pow. A small sync
+   SHA-256 keeps the tracker dependency-free.
+3. Data-center IPs (SCF_DATACENTER_RANGES): a CIDR file built from the
+   cloud providers' published lists, matched in memory.
+4. Many visitors per network (SCF_MAX_VISITORS_PER_IP_HOUR): distinct
+   visitors per site, /24 or /48 and hour, counted in a Redis
+   HyperLogLog under HMACs keyed by the daily salt. New visitors past the
+   limit are flagged.
+
+Flagged rows keep path, referrer domain, country and coarse client info,
+never the IP or query string. GET /api/scf/flagged (admins only) returns
+totals per site and reason, and the latest events for one site.
+
+Also: COLLECT_API_ENDPOINT as a Docker build arg, and immutable cache
+headers for versioned tracker releases under /v/.
+---
+ Dockerfile                                    |   4 +
+ next.config.ts                                |  10 ++
+ .../28_scf_flagged_event/migration.sql        |  19 +++
+ prisma/schema.prisma                          |  20 +++
+ src/app/api/scf/flagged/route.ts              |  83 +++++++++++
+ src/app/api/send/route.ts                     |  45 ++++--
+ src/lib/scf/datacenter.test.ts                |  42 ++++++
+ src/lib/scf/datacenter.ts                     | 129 +++++++++++++++++
+ src/lib/scf/fingerprints.ts                   |  58 ++++++++
+ src/lib/scf/origin.ts                         |  22 +--
+ src/lib/scf/pow.test.ts                       |  57 ++++++++
+ src/lib/scf/pow.ts                            |  60 ++++++++
+ src/lib/scf/quality.ts                        | 130 ++++++++++++++++++
+ src/tracker/index.ts                          |   3 +
+ src/tracker/pow.ts                            | 106 ++++++++++++++
+ 15 files changed, 754 insertions(+), 34 deletions(-)
+ create mode 100644 prisma/migrations/28_scf_flagged_event/migration.sql
+ create mode 100644 src/app/api/scf/flagged/route.ts
+ create mode 100644 src/lib/scf/datacenter.test.ts
+ create mode 100644 src/lib/scf/datacenter.ts
+ create mode 100644 src/lib/scf/fingerprints.ts
+ create mode 100644 src/lib/scf/pow.test.ts
+ create mode 100644 src/lib/scf/pow.ts
+ create mode 100644 src/lib/scf/quality.ts
+ create mode 100644 src/tracker/pow.ts
+
+diff --git a/Dockerfile b/Dockerfile
+index 57b2139..072154d 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -34,8 +34,12 @@ COPY . .
+ COPY docker/proxy.ts ./src
+ 
+ ARG BASE_PATH
++# SCF: a neutral collect path (e.g. /e) that ad-block lists do not target.
++# Read by next.config.ts at build time to add the rewrite to /api/send.
++ARG COLLECT_API_ENDPOINT
+ 
+ ENV BASE_PATH=$BASE_PATH
++ENV COLLECT_API_ENDPOINT=$COLLECT_API_ENDPOINT
+ ENV NEXT_TELEMETRY_DISABLED=1
+ ENV DATABASE_URL="postgresql://user:pass@localhost:5432/dummy"
+ 
+diff --git a/next.config.ts b/next.config.ts
+index e240e55..091eef7 100644
+--- a/next.config.ts
++++ b/next.config.ts
+@@ -96,6 +96,16 @@ const headers = [
+   },
+ ];
+ 
++// SCF: versioned tracker releases (public/v/<version>/l.js) never change once
++// published, so browsers and caches may keep them for a year.
++headers.push({
++  source: '/v/:path*',
++  headers: [
++    { key: 'Access-Control-Allow-Origin', value: '*' },
++    { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
++  ],
++});
++
+ if (isProd) {
+   headers.push({
+     source: TRACKER_SCRIPT,
+diff --git a/prisma/migrations/28_scf_flagged_event/migration.sql b/prisma/migrations/28_scf_flagged_event/migration.sql
+new file mode 100644
+index 0000000..938a8bc
+--- /dev/null
++++ b/prisma/migrations/28_scf_flagged_event/migration.sql
+@@ -0,0 +1,19 @@
++-- SCF: events that failed the bot and inflation checks. Kept apart from
++-- website_event so Umami's own reports never count them. No IP, no query string.
++CREATE TABLE "scf_flagged_event" (
++  "event_id" UUID NOT NULL PRIMARY KEY,
++  "website_id" UUID NOT NULL,
++  "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  "reasons" VARCHAR(30)[],
++  "event_type" INTEGER NOT NULL DEFAULT 1,
++  "event_name" VARCHAR(50),
++  "hostname" VARCHAR(100),
++  "url_path" VARCHAR(500),
++  "referrer_domain" VARCHAR(500),
++  "country" CHAR(2),
++  "browser" VARCHAR(20),
++  "os" VARCHAR(20),
++  "device" VARCHAR(20)
++);
++
++CREATE INDEX "scf_flagged_event_website_id_created_at_idx" ON "scf_flagged_event"("website_id", "created_at");
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index ba94dbc..42686a9 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -582,3 +582,23 @@ model ErrorRateLimit {
+ 
+   @@map("error_rate_limit")
+ }
++
++// SCF: events that failed the bot and inflation checks (src/lib/scf/quality.ts).
++model ScfFlaggedEvent {
++  id             String   @id @map("event_id") @db.Uuid
++  websiteId      String   @map("website_id") @db.Uuid
++  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
++  reasons        String[] @db.VarChar(30)
++  eventType      Int      @default(1) @map("event_type") @db.Integer
++  eventName      String?  @map("event_name") @db.VarChar(50)
++  hostname       String?  @db.VarChar(100)
++  urlPath        String?  @map("url_path") @db.VarChar(500)
++  referrerDomain String?  @map("referrer_domain") @db.VarChar(500)
++  country        String?  @db.Char(2)
++  browser        String?  @db.VarChar(20)
++  os             String?  @db.VarChar(20)
++  device         String?  @db.VarChar(20)
++
++  @@index([websiteId, createdAt])
++  @@map("scf_flagged_event")
++}
+diff --git a/src/app/api/scf/flagged/route.ts b/src/app/api/scf/flagged/route.ts
+new file mode 100644
+index 0000000..355e6b4
+--- /dev/null
++++ b/src/app/api/scf/flagged/route.ts
+@@ -0,0 +1,83 @@
++import { z } from 'zod';
++import prisma from '@/lib/prisma';
++import { parseRequest } from '@/lib/request';
++import { json, unauthorized } from '@/lib/response';
++import { unixTimestampParam } from '@/lib/schema';
++
++/**
++ * SCF: flagged traffic for operators (admins only). Without websiteId it returns
++ * per-site totals and counts per reason; with websiteId it also returns the
++ * latest flagged events for that site. Times are unix seconds.
++ */
++export async function GET(request: Request) {
++  const schema = z.object({
++    startAt: unixTimestampParam,
++    endAt: unixTimestampParam,
++    websiteId: z.uuid().optional(),
++  });
++
++  const { auth, query, error } = await parseRequest(request, schema);
++
++  if (error) {
++    return error();
++  }
++
++  if (!auth?.user?.isAdmin) {
++    return unauthorized();
++  }
++
++  const params = {
++    startDate: new Date(query.startAt * 1000),
++    endDate: new Date(query.endAt * 1000),
++    websiteId: query.websiteId ?? null,
++  };
++
++  const totals: { website_id: string; events: bigint }[] = await prisma.rawQuery(
++    `select website_id, count(*) as events
++       from scf_flagged_event
++      where created_at between {{startDate}} and {{endDate}}
++        and ({{websiteId::uuid}} is null or website_id = {{websiteId::uuid}})
++      group by website_id`,
++    params,
++  );
++
++  const byReason: { website_id: string; reason: string; events: bigint }[] = await prisma.rawQuery(
++    `select website_id, reason, count(*) as events
++       from scf_flagged_event, unnest(reasons) as reason
++      where created_at between {{startDate}} and {{endDate}}
++        and ({{websiteId::uuid}} is null or website_id = {{websiteId::uuid}})
++      group by website_id, reason`,
++    params,
++  );
++
++  const websites = totals.map(row => ({
++    websiteId: row.website_id,
++    events: Number(row.events),
++    reasons: Object.fromEntries(
++      byReason.filter(r => r.website_id === row.website_id).map(r => [r.reason, Number(r.events)]),
++    ),
++  }));
++
++  const recent = query.websiteId
++    ? await prisma.client.scfFlaggedEvent.findMany({
++        where: { websiteId: query.websiteId, createdAt: { gte: params.startDate, lte: params.endDate } },
++        orderBy: { createdAt: 'desc' },
++        take: 50,
++        select: {
++          createdAt: true,
++          reasons: true,
++          eventType: true,
++          eventName: true,
++          hostname: true,
++          urlPath: true,
++          referrerDomain: true,
++          country: true,
++          browser: true,
++          os: true,
++          device: true,
++        },
++      })
++    : undefined;
++
++  return json({ websites, recent });
++}
+diff --git a/src/app/api/send/route.ts b/src/app/api/send/route.ts
+index 4f2f2d1..5a752c7 100644
+--- a/src/app/api/send/route.ts
++++ b/src/app/api/send/route.ts
+@@ -8,8 +8,8 @@ import { truncateString } from '@/lib/format';
+ import { createToken, parseToken } from '@/lib/jwt';
+ import { fetchWebsite } from '@/lib/load';
+ import { parseRequest } from '@/lib/request';
+-import { checkBrowserOrigin, isOriginCheckEnabled, recordRejection } from '@/lib/scf/origin';
+ import { keepUtmOnly, scf } from '@/lib/scf/privacy';
++import { assessEvent, isQualityCheckEnabled, saveFlaggedEvent } from '@/lib/scf/quality';
+ import { badRequest, forbidden, json, serverError } from '@/lib/response';
+ import { safeDecodeURI, safeDecodeURIComponent } from '@/lib/url';
+ import {
+@@ -86,18 +86,6 @@ export async function POST(request: Request) {
+       }
+     }
+ 
+-    // SCF: only count events a browser sent from one of the site's own domains.
+-    // Rejections get the same reply as bots, so a script cannot tell why.
+-    if (websiteId && isOriginCheckEnabled()) {
+-      const website = await fetchWebsite(websiteId);
+-      const verdict = checkBrowserOrigin(request.headers, website?.domain);
+-
+-      if (verdict.ok === false) {
+-        await recordRejection(websiteId, verdict.reason);
+-        return json({ beep: 'boop' });
+-      }
+-    }
+-
+     // Carried forward in the cache token so repeat identify calls skip identity writes
+     let sessionLinkId = cache?.sessionLinkId;
+ 
+@@ -117,6 +105,37 @@ export async function POST(request: Request) {
+       return forbidden();
+     }
+ 
++    // SCF: events that fail the bot and inflation checks are stored apart and
++    // never counted. They get the same reply as bots, so a script cannot tell why.
++    if (websiteId && isQualityCheckEnabled()) {
++      const website = await fetchWebsite(websiteId);
++      const reasons = await assessEvent({
++        headers: request.headers,
++        websiteId,
++        siteDomain: website?.domain,
++        url,
++        ip,
++        userAgent,
++        createdAt: new Date(),
++      });
++
++      if (reasons.length > 0) {
++        await saveFlaggedEvent({
++          websiteId,
++          reasons,
++          url,
++          hostname,
++          referrer,
++          eventName: name,
++          country,
++          browser,
++          os,
++          device,
++        });
++        return json({ beep: 'boop' });
++      }
++    }
++
+     const createdAt = timestamp !== undefined ? new Date(timestamp * 1000) : new Date();
+     const distinctId = truncateString(id, FIELD_LENGTH.distinctId);
+ 
+diff --git a/src/lib/scf/datacenter.test.ts b/src/lib/scf/datacenter.test.ts
+new file mode 100644
+index 0000000..1d0a279
+--- /dev/null
++++ b/src/lib/scf/datacenter.test.ts
+@@ -0,0 +1,42 @@
++import { describe, expect, it } from 'vitest';
++import { isInRanges, parseRanges } from './datacenter';
++
++const ranges = parseRanges(`
++# provider: example
++3.0.0.0/15
++3.2.0.0/16        # adjacent, merges with the line above
++13.32.0.0/15
++203.0.113.7/32
++not a cidr
++2600:1f00::/24
++2a01:4f8::/32
++`);
++
++describe('data-center ranges', () => {
++  it('merges adjacent IPv4 ranges', () => {
++    expect(ranges.v4.length / 2).toBe(3);
++  });
++
++  it('matches IPv4 inside, at the edges and outside', () => {
++    expect(isInRanges(ranges, '3.0.0.0')).toBe(true);
++    expect(isInRanges(ranges, '3.2.255.255')).toBe(true);
++    expect(isInRanges(ranges, '3.3.0.0')).toBe(false);
++    expect(isInRanges(ranges, '13.33.10.1')).toBe(true);
++    expect(isInRanges(ranges, '203.0.113.7')).toBe(true);
++    expect(isInRanges(ranges, '203.0.113.8')).toBe(false);
++    expect(isInRanges(ranges, '102.89.1.1')).toBe(false);
++  });
++
++  it('matches IPv6 and IPv4-mapped IPv6', () => {
++    expect(isInRanges(ranges, '2600:1f00:1234::1')).toBe(true);
++    expect(isInRanges(ranges, '2a01:4f8:c0c:1::2')).toBe(true);
++    expect(isInRanges(ranges, '2a01:4f9::1')).toBe(false);
++    expect(isInRanges(ranges, '::ffff:3.1.2.3')).toBe(true);
++  });
++
++  it('ignores empty and invalid input', () => {
++    expect(isInRanges(ranges, '')).toBe(false);
++    expect(isInRanges(ranges, 'nope')).toBe(false);
++    expect(isInRanges(ranges, undefined)).toBe(false);
++  });
++});
+diff --git a/src/lib/scf/datacenter.ts b/src/lib/scf/datacenter.ts
+new file mode 100644
+index 0000000..ef1a861
+--- /dev/null
++++ b/src/lib/scf/datacenter.ts
+@@ -0,0 +1,129 @@
++import { readFileSync } from 'node:fs';
++import ipaddr from 'ipaddr.js';
++
++/**
++ * SCF: flags events from published cloud and hosting provider IP ranges. Real
++ * visitors browse from homes, offices and phones; scripted traffic usually runs
++ * on rented servers.
++ *
++ * SCF_DATACENTER_RANGES points to a file with one CIDR per line (# for comments),
++ * built by scripts/update-datacenter-ranges.mjs from the providers' own lists.
++ * The IP is only checked in memory; it is never stored.
++ */
++
++type Ranges = { v4: Uint32Array; v6: bigint[] };
++
++let cached: { path: string; ranges: Ranges } | null = null;
++
++function v6ToBigInt(addr: ipaddr.IPv6): bigint {
++  return addr.parts.reduce((acc, part) => (acc << 16n) | BigInt(part), 0n);
++}
++
++function merge<T extends number | bigint>(pairs: [T, T][]): [T, T][] {
++  pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
++  const out: [T, T][] = [];
++  for (const [start, end] of pairs) {
++    const last = out[out.length - 1];
++    if (last && start <= (typeof last[1] === 'bigint' ? (last[1] as bigint) + 1n : (last[1] as number) + 1)) {
++      if (end > last[1]) last[1] = end;
++    } else {
++      out.push([start, end]);
++    }
++  }
++  return out;
++}
++
++/** Parses CIDR lines into merged, sorted [start, end] ranges. Bad lines are skipped. */
++export function parseRanges(text: string): Ranges {
++  const v4: [number, number][] = [];
++  const v6: [bigint, bigint][] = [];
++
++  for (const raw of text.split('\n')) {
++    const line = raw.replace(/#.*/, '').trim();
++    if (!line) continue;
++
++    let parsed: [ipaddr.IPv4 | ipaddr.IPv6, number];
++    try {
++      parsed = ipaddr.parseCIDR(line);
++    } catch {
++      continue;
++    }
++    const [addr, prefix] = parsed;
++
++    if (addr.kind() === 'ipv4') {
++      const start = (addr as ipaddr.IPv4).octets.reduce((acc, o) => acc * 256 + o, 0);
++      const size = 2 ** (32 - prefix);
++      const base = start - (start % size);
++      v4.push([base, base + size - 1]);
++    } else {
++      const value = v6ToBigInt(addr as ipaddr.IPv6);
++      const hostBits = BigInt(128 - prefix);
++      const base = (value >> hostBits) << hostBits;
++      v6.push([base, base + (1n << hostBits) - 1n]);
++    }
++  }
++
++  const mergedV4 = merge(v4);
++  const flat = new Uint32Array(mergedV4.length * 2);
++  mergedV4.forEach(([s, e], i) => {
++    flat[i * 2] = s;
++    flat[i * 2 + 1] = e;
++  });
++
++  return { v4: flat, v6: merge(v6).flat() };
++}
++
++function inSorted<T extends number | bigint>(list: ArrayLike<T>, value: T): boolean {
++  let lo = 0;
++  let hi = list.length / 2 - 1;
++  while (lo <= hi) {
++    const mid = (lo + hi) >> 1;
++    const start = list[mid * 2];
++    const end = list[mid * 2 + 1];
++    if (value < start) hi = mid - 1;
++    else if (value > end) lo = mid + 1;
++    else return true;
++  }
++  return false;
++}
++
++export function isInRanges(ranges: Ranges, ip: string | undefined | null): boolean {
++  if (!ip || !ipaddr.isValid(ip)) return false;
++  const addr = ipaddr.process(ip);
++
++  if (addr.kind() === 'ipv4') {
++    const value = (addr as ipaddr.IPv4).octets.reduce((acc, o) => acc * 256 + o, 0);
++    return inSorted(ranges.v4, value);
++  }
++  return inSorted(ranges.v6, v6ToBigInt(addr as ipaddr.IPv6));
++}
++
++function load(): Ranges | null {
++  const path = process.env.SCF_DATACENTER_RANGES;
++  if (!path) return null;
++  if (cached?.path === path) return cached.ranges;
++
++  try {
++    const ranges = parseRanges(readFileSync(path, 'utf8'));
++    cached = { path, ranges };
++    // eslint-disable-next-line no-console
++    console.info(
++      JSON.stringify({ scf: 'datacenter_ranges_loaded', v4: ranges.v4.length / 2, v6: ranges.v6.length / 2 }),
++    );
++    return ranges;
++  } catch (err) {
++    // eslint-disable-next-line no-console
++    console.error(JSON.stringify({ scf: 'datacenter_ranges_unreadable', path, error: String(err) }));
++    cached = { path, ranges: { v4: new Uint32Array(0), v6: [] } };
++    return cached.ranges;
++  }
++}
++
++export function isDatacenterCheckEnabled(): boolean {
++  return !!process.env.SCF_DATACENTER_RANGES;
++}
++
++export function isDatacenterIp(ip: string | undefined | null): boolean {
++  const ranges = load();
++  return ranges ? isInRanges(ranges, ip) : false;
++}
+diff --git a/src/lib/scf/fingerprints.ts b/src/lib/scf/fingerprints.ts
+new file mode 100644
+index 0000000..bc72cc1
+--- /dev/null
++++ b/src/lib/scf/fingerprints.ts
+@@ -0,0 +1,58 @@
++import { createHmac } from 'node:crypto';
++import { secret } from '@/lib/crypto';
++import redis from '@/lib/redis';
++import { getDailySalt } from './daily-salt';
++import { truncateIp } from './privacy';
++
++/**
++ * SCF: many visitors from one network. Counts distinct visitors (IP + user agent)
++ * per site, per /24 (IPv4) or /48 (IPv6) network, per hour, in Redis with a
++ * HyperLogLog. Once a network passes the limit, NEW visitors from it are flagged;
++ * visitors already counted this hour keep counting.
++ *
++ * Keys and members are HMACs under the random daily salt, so Redis never holds
++ * an IP or a network address, and they expire after two hours.
++ */
++
++const HOUR_MS = 3600 * 1000;
++const KEY_TTL_SECONDS = 2 * 3600;
++
++/** Distinct visitors allowed per network, site and hour, or 0 when the check is off. */
++export function maxVisitorsPerNetwork(): number {
++  const value = Number(process.env.SCF_MAX_VISITORS_PER_IP_HOUR || 0);
++  return Number.isInteger(value) && value > 0 ? value : 0;
++}
++
++function mac(key: string, value: string): string {
++  return createHmac('sha256', key).update(value).digest('base64url').slice(0, 22);
++}
++
++/** Records the visitor and returns true when it is new and its network is over the limit. */
++export async function isNetworkOverLimit(
++  websiteId: string,
++  ip: string | undefined,
++  userAgent: string | undefined,
++  now = new Date(),
++): Promise<boolean> {
++  const limit = maxVisitorsPerNetwork();
++  const network = truncateIp(ip);
++  if (!limit || !network || !redis.enabled) return false;
++
++  try {
++    const salt = (await getDailySalt(now)) ?? secret();
++    const hour = Math.floor(now.getTime() / HOUR_MS);
++    const key = `scf:net:${websiteId}:${hour}:${mac(salt, network)}`;
++    const member = mac(salt, `${ip}|${userAgent ?? ''}`);
++
++    await redis.client.connect();
++    const client = redis.client.client;
++    const added = await client.pfAdd(key, member);
++    if (!added) return false;
++
++    const [count] = await Promise.all([client.pfCount(key), client.expire(key, KEY_TTL_SECONDS)]);
++    return Number(count) > limit;
++  } catch {
++    // Counting is best-effort; it must never block collection.
++    return false;
++  }
++}
+diff --git a/src/lib/scf/origin.ts b/src/lib/scf/origin.ts
+index d603200..a496a4a 100644
+--- a/src/lib/scf/origin.ts
++++ b/src/lib/scf/origin.ts
+@@ -1,17 +1,14 @@
+-import redis from '@/lib/redis';
+-
+ /**
+  * SCF: count an event only when a browser sent it from one of the site's own
+  * domains. Browsers attach `Origin` and Fetch Metadata (`Sec-Fetch-*`) headers to
+  * the tracker's fetch call; a script posting from a server usually does not. This
+  * raises the cost of faking traffic; it is one layer, not proof of a human.
++ * Failing events are flagged, not counted: see quality.ts.
+  */
+ 
+ export type RejectReason = 'missing_origin' | 'not_browser_fetch' | 'no_site_domain' | 'origin_mismatch';
+ export type OriginVerdict = { ok: true } | { ok: false; reason: RejectReason };
+ 
+-const REJECTION_TTL_SECONDS = 35 * 86400;
+-
+ export function isOriginCheckEnabled(): boolean {
+   return !!process.env.SCF_ENFORCE_ORIGIN;
+ }
+@@ -57,20 +54,3 @@ export function checkBrowserOrigin(headers: Headers, siteDomain: string | null |
+     ? { ok: true }
+     : { ok: false, reason: 'origin_mismatch' };
+ }
+-
+-/** Counts rejected events per site, reason and day, so operators can spot inflation attempts. */
+-export async function recordRejection(websiteId: string, reason: RejectReason): Promise<void> {
+-  // eslint-disable-next-line no-console
+-  console.warn(JSON.stringify({ scf: 'event_rejected', websiteId, reason }));
+-
+-  if (!redis.enabled) return;
+-
+-  try {
+-    const day = new Date().toISOString().slice(0, 10);
+-    const key = `scf:rejected:${day}:${websiteId}:${reason}`;
+-    const count = await redis.client.incr(key);
+-    if (count === 1) await redis.client.expire(key, REJECTION_TTL_SECONDS);
+-  } catch {
+-    // Counting is best-effort; it must never block collection.
+-  }
+-}
+diff --git a/src/lib/scf/pow.test.ts b/src/lib/scf/pow.test.ts
+new file mode 100644
+index 0000000..ba96329
+--- /dev/null
++++ b/src/lib/scf/pow.test.ts
+@@ -0,0 +1,57 @@
++import { createHash } from 'node:crypto';
++import { describe, expect, it } from 'vitest';
++import { prove, sha256Words } from '@/tracker/pow';
++import { leadingZeroBits, SLOT_MS, verifyProof } from './pow';
++
++const site = '3f1c2c4e-4b1e-4b8f-9c55-7b2f2a7f0a11';
++
++function nodeWords(message: string): number[] {
++  const digest = createHash('sha256').update(message).digest();
++  return Array.from({ length: 8 }, (_, i) => digest.readUInt32BE(i * 4));
++}
++
++describe('tracker sha256', () => {
++  it('matches node:crypto for empty, short, block-boundary, long and non-ASCII input', () => {
++    const inputs = ['', 'abc', 'a'.repeat(55), 'a'.repeat(56), 'a'.repeat(64), 'x'.repeat(1000), 'héllo ✨ /ναι?q=1'];
++    for (const input of inputs) expect(sha256Words(input)).toEqual(nodeWords(input));
++  });
++});
++
++describe('leadingZeroBits', () => {
++  it('counts across bytes', () => {
++    expect(leadingZeroBits(Uint8Array.from([0, 0, 0x10, 0xff]))).toBe(19);
++    expect(leadingZeroBits(Uint8Array.from([0x80]))).toBe(0);
++    expect(leadingZeroBits(Uint8Array.from([0, 0]))).toBe(16);
++  });
++});
++
++describe('proof of JavaScript', () => {
++  const now = Date.UTC(2026, 10, 13, 12, 0, 0);
++  const url = 'https://example.org/docs?utm_source=x';
++
++  it('accepts a proof made by the tracker', () => {
++    const proof = prove(site, url, now, 10);
++    expect(verifyProof(proof, site, url, 10, now)).toEqual({ ok: true });
++  });
++
++  it('accepts the next window for clock skew, rejects windows further away', () => {
++    const proof = prove(site, url, now, 10);
++    expect(verifyProof(proof, site, url, 10, now + SLOT_MS)).toEqual({ ok: true });
++    expect(verifyProof(proof, site, url, 10, now + 2 * SLOT_MS)).toEqual({ ok: false, reason: 'bad_proof' });
++  });
++
++  it('rejects a proof for another page or site, a missing header and junk', () => {
++    const proof = prove(site, url, now, 10);
++    expect(verifyProof(proof, site, `${url}&x=1`, 10, now).ok).toBe(false);
++    expect(verifyProof(proof, '00000000-0000-0000-0000-000000000000', url, 10, now).ok).toBe(false);
++    expect(verifyProof(null, site, url, 10, now)).toEqual({ ok: false, reason: 'no_proof' });
++    expect(verifyProof('1.2.3', site, url, 10, now)).toEqual({ ok: false, reason: 'bad_proof' });
++  });
++
++  it('rejects a nonce that does not reach the required bits', () => {
++    const slot = Math.floor(now / SLOT_MS);
++    let nonce = 0;
++    while (Math.clz32(sha256Words(`${site}:${slot}:${url}:${nonce}`)[0]) >= 10) nonce++;
++    expect(verifyProof(`${slot}.${nonce}`, site, url, 10, now)).toEqual({ ok: false, reason: 'bad_proof' });
++  });
++});
+diff --git a/src/lib/scf/pow.ts b/src/lib/scf/pow.ts
+new file mode 100644
+index 0000000..942dce6
+--- /dev/null
++++ b/src/lib/scf/pow.ts
+@@ -0,0 +1,60 @@
++import { createHash } from 'node:crypto';
++
++/**
++ * SCF: proof of JavaScript. The tracker searches for a nonce so that
++ * sha256("<website id>:<slot>:<url>:<nonce>") starts with a number of zero bits,
++ * where <slot> is the 10-minute window it ran in. It sends "<slot>.<nonce>" in the
++ * `x-lumenstat-pow` header. One visitor pays a few milliseconds; a script that
++ * fakes thousands of page views must run the tracker's logic for each one.
++ *
++ * This is one layer, not proof of a human. It only raises the cost of faking.
++ */
++
++export const POW_HEADER = 'x-lumenstat-pow';
++export const SLOT_MS = 10 * 60 * 1000;
++
++/** Required zero bits, or 0 when the check is off. The tracker works to 10 bits. */
++export function powBits(): number {
++  const bits = Number(process.env.SCF_POW_BITS || 0);
++  return Number.isInteger(bits) && bits > 0 && bits <= 24 ? bits : 0;
++}
++
++export function leadingZeroBits(digest: Uint8Array): number {
++  let bits = 0;
++  for (const byte of digest) {
++    if (byte === 0) {
++      bits += 8;
++      continue;
++    }
++    return bits + Math.clz32(byte) - 24;
++  }
++  return bits;
++}
++
++export function proofDigest(websiteId: string, slot: number, url: string, nonce: string): Uint8Array {
++  return createHash('sha256').update(`${websiteId}:${slot}:${url}:${nonce}`).digest();
++}
++
++export type ProofVerdict = { ok: true } | { ok: false; reason: 'no_proof' | 'bad_proof' };
++
++/** Checks the header against the payload. Slots one window either side are accepted for clock skew. */
++export function verifyProof(
++  header: string | null,
++  websiteId: string,
++  url: string,
++  bits: number,
++  now = Date.now(),
++): ProofVerdict {
++  if (!header) return { ok: false, reason: 'no_proof' };
++
++  const match = /^(\d{1,10})\.(\d{1,12})$/.exec(header.trim());
++  if (!match) return { ok: false, reason: 'bad_proof' };
++
++  const slot = Number(match[1]);
++  const current = Math.floor(now / SLOT_MS);
++  if (Math.abs(slot - current) > 1) return { ok: false, reason: 'bad_proof' };
++
++  return leadingZeroBits(proofDigest(websiteId, slot, url ?? '', match[2])) >= bits
++    ? { ok: true }
++    : { ok: false, reason: 'bad_proof' };
++}
+diff --git a/src/lib/scf/quality.ts b/src/lib/scf/quality.ts
+new file mode 100644
+index 0000000..642b660
+--- /dev/null
++++ b/src/lib/scf/quality.ts
+@@ -0,0 +1,130 @@
++import { EVENT_TYPE } from '@/lib/constants';
++import { uuid } from '@/lib/crypto';
++import prisma from '@/lib/prisma';
++import { isDatacenterCheckEnabled, isDatacenterIp } from './datacenter';
++import { isNetworkOverLimit, maxVisitorsPerNetwork } from './fingerprints';
++import { checkBrowserOrigin, isOriginCheckEnabled } from './origin';
++import { POW_HEADER, powBits, verifyProof } from './pow';
++
++/**
++ * SCF: the quality flag. Events that fail any check below are stored in
++ * scf_flagged_event instead of website_event, so Umami's reports never count
++ * them, while operators can still see who is being inflated and how.
++ *
++ *   1. Real browser:   Origin matches the site's domains, Fetch Metadata present.
++ *   2. Proof of JS:    the tracker's proof-of-work header is valid.
++ *   3. Data center:    the IP is not in a published cloud provider range.
++ *   4. Many visitors:  the visitor's network is under the hourly limit.
++ *
++ * Each layer has its own switch, so the fork behaves like upstream when none is set.
++ */
++
++export type FlagReason =
++  | 'missing_origin'
++  | 'not_browser_fetch'
++  | 'no_site_domain'
++  | 'origin_mismatch'
++  | 'no_proof'
++  | 'bad_proof'
++  | 'datacenter_ip'
++  | 'many_visitors_per_network';
++
++export function isQualityCheckEnabled(): boolean {
++  return isOriginCheckEnabled() || powBits() > 0 || isDatacenterCheckEnabled() || maxVisitorsPerNetwork() > 0;
++}
++
++export interface EventToAssess {
++  headers: Headers;
++  websiteId: string;
++  siteDomain: string | null | undefined;
++  url: string;
++  ip: string | undefined;
++  userAgent: string | undefined;
++  createdAt: Date;
++}
++
++export async function assessEvent(event: EventToAssess): Promise<FlagReason[]> {
++  const reasons: FlagReason[] = [];
++
++  if (isOriginCheckEnabled()) {
++    const verdict = checkBrowserOrigin(event.headers, event.siteDomain);
++    if (verdict.ok === false) reasons.push(verdict.reason);
++  }
++
++  const bits = powBits();
++  if (bits > 0) {
++    const verdict = verifyProof(event.headers.get(POW_HEADER), event.websiteId, event.url, bits);
++    if (verdict.ok === false) reasons.push(verdict.reason);
++  }
++
++  if (isDatacenterCheckEnabled() && isDatacenterIp(event.ip)) {
++    reasons.push('datacenter_ip');
++  }
++
++  // Only count visitors that passed everything else, so blocked scripts do not
++  // push real visitors from the same network over the limit.
++  if (reasons.length === 0 && (await isNetworkOverLimit(event.websiteId, event.ip, event.userAgent, event.createdAt))) {
++    reasons.push('many_visitors_per_network');
++  }
++
++  return reasons;
++}
++
++export interface FlaggedEvent {
++  websiteId: string;
++  reasons: FlagReason[];
++  url: string | undefined;
++  hostname: string | undefined;
++  referrer: string | undefined;
++  eventName: string | undefined;
++  country: string | undefined;
++  browser: string | undefined;
++  os: string | undefined;
++  device: string | undefined;
++}
++
++function pathOf(url: string | undefined, hostname: string | undefined): string | undefined {
++  if (!url) return undefined;
++  try {
++    return new URL(url, `https://${hostname || 'localhost'}`).pathname.slice(0, 500);
++  } catch {
++    return undefined;
++  }
++}
++
++function domainOf(referrer: string | undefined): string | undefined {
++  if (!referrer) return undefined;
++  try {
++    return new URL(referrer).hostname.replace(/^www\./, '').slice(0, 500) || undefined;
++  } catch {
++    return undefined;
++  }
++}
++
++/** Stores a flagged event: path, referrer domain and coarse client info only, never the IP or query. */
++export async function saveFlaggedEvent(event: FlaggedEvent): Promise<void> {
++  // eslint-disable-next-line no-console
++  console.warn(JSON.stringify({ scf: 'event_flagged', websiteId: event.websiteId, reasons: event.reasons }));
++
++  try {
++    await prisma.client.scfFlaggedEvent.create({
++      data: {
++        id: uuid(),
++        websiteId: event.websiteId,
++        reasons: event.reasons,
++        eventType: event.eventName ? EVENT_TYPE.customEvent : EVENT_TYPE.pageView,
++        eventName: event.eventName?.slice(0, 50),
++        hostname: event.hostname?.slice(0, 100),
++        urlPath: pathOf(event.url, event.hostname),
++        referrerDomain: domainOf(event.referrer),
++        country: event.country?.slice(0, 2),
++        browser: event.browser?.slice(0, 20),
++        os: event.os?.slice(0, 20),
++        device: event.device?.slice(0, 20),
++      },
++    });
++  } catch (err) {
++    // eslint-disable-next-line no-console
++    console.error(JSON.stringify({ scf: 'flagged_event_not_saved', error: String(err) }));
++  }
++}
+diff --git a/src/tracker/index.ts b/src/tracker/index.ts
+index 5904756..94e75e0 100644
+--- a/src/tracker/index.ts
++++ b/src/tracker/index.ts
+@@ -1,3 +1,4 @@
++import { prove } from './pow';
+ import { createErrorCollector, type ErrorCaptureOptions } from './errors';
+ 
+ export type { ErrorCaptureOptions } from './errors';
+@@ -481,6 +482,8 @@ type MetricEntry = PerformanceEntry & {
+           'Content-Type': 'application/json',
+           'x-umami-website-id': website as string,
+           'x-umami-hostname': hostname,
++          // SCF: proof of JavaScript, checked by the server (src/lib/scf/pow.ts).
++          'x-lumenstat-pow': prove(String(payload.website ?? website), String(payload.url ?? '')),
+           ...(typeof cache !== 'undefined' && { 'x-umami-cache': cache }),
+         },
+         credentials,
+diff --git a/src/tracker/pow.ts b/src/tracker/pow.ts
+new file mode 100644
+index 0000000..0b9febd
+--- /dev/null
++++ b/src/tracker/pow.ts
+@@ -0,0 +1,106 @@
++/**
++ * SCF: proof of JavaScript for the tracker (checked by src/lib/scf/pow.ts).
++ *
++ * Finds a nonce so that sha256("<website>:<slot>:<url>:<nonce>") starts with
++ * POW_BITS zero bits, where <slot> is the current 10-minute window. About 1,000
++ * hashes on average: a few milliseconds on a phone. The result is cached per
++ * page and window, so repeat events on a page cost nothing.
++ *
++ * A small synchronous SHA-256 keeps the tracker free of dependencies and avoids
++ * WebCrypto's per-call async overhead.
++ */
++
++export const POW_BITS = 10;
++const SLOT_MS = 10 * 60 * 1000;
++
++const K: number[] = [];
++const H: number[] = [];
++
++// Round constants and initial hash: fractional parts of cube and square roots of the first primes.
++for (let n = 2, i = 0; i < 64; n++) {
++  let prime = true;
++  for (let d = 2; d * d <= n; d++) {
++    if (n % d === 0) {
++      prime = false;
++      break;
++    }
++  }
++  if (prime) {
++    if (i < 8) H[i] = (n ** 0.5 * 2 ** 32) | 0;
++    K[i++] = (n ** (1 / 3) * 2 ** 32) | 0;
++  }
++}
++
++const ror = (x: number, n: number) => (x >>> n) | (x << (32 - n));
++const encoder = new TextEncoder();
++
++/** The full SHA-256 digest as eight 32-bit words. */
++export const sha256Words = (message: string): number[] => {
++  const bytes = encoder.encode(message);
++  const length = bytes.length;
++  const total = ((length + 72) >> 6) << 6;
++  const m = new Uint8Array(total);
++  m.set(bytes);
++  m[length] = 0x80;
++  const bits = length * 8;
++  m[total - 4] = bits >>> 24;
++  m[total - 3] = (bits >>> 16) & 255;
++  m[total - 2] = (bits >>> 8) & 255;
++  m[total - 1] = bits & 255;
++
++  const h = H.slice();
++  const w: number[] = [];
++
++  for (let offset = 0; offset < total; offset += 64) {
++    for (let i = 0; i < 16; i++) {
++      const j = offset + i * 4;
++      w[i] = (m[j] << 24) | (m[j + 1] << 16) | (m[j + 2] << 8) | m[j + 3];
++    }
++    for (let i = 16; i < 64; i++) {
++      const a = w[i - 15];
++      const b = w[i - 2];
++      w[i] =
++        (w[i - 16] + (ror(a, 7) ^ ror(a, 18) ^ (a >>> 3)) + w[i - 7] + (ror(b, 17) ^ ror(b, 19) ^ (b >>> 10))) | 0;
++    }
++
++    let [a, b, c, d, e, f, g, k] = h;
++    for (let i = 0; i < 64; i++) {
++      const t1 = (k + (ror(e, 6) ^ ror(e, 11) ^ ror(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0;
++      const t2 = ((ror(a, 2) ^ ror(a, 13) ^ ror(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
++      k = g;
++      g = f;
++      f = e;
++      e = (d + t1) | 0;
++      d = c;
++      c = b;
++      b = a;
++      a = (t1 + t2) | 0;
++    }
++
++    h[0] = (h[0] + a) | 0;
++    h[1] = (h[1] + b) | 0;
++    h[2] = (h[2] + c) | 0;
++    h[3] = (h[3] + d) | 0;
++    h[4] = (h[4] + e) | 0;
++    h[5] = (h[5] + f) | 0;
++    h[6] = (h[6] + g) | 0;
++    h[7] = (h[7] + k) | 0;
++  }
++
++  return h.map(x => x >>> 0);
++};
++
++let last: { prefix: string; proof: string } | undefined;
++
++/** Returns "<slot>.<nonce>" for the `x-lumenstat-pow` header. */
++export const prove = (website: string, url: string, now = Date.now(), bits = POW_BITS): string => {
++  const slot = Math.floor(now / SLOT_MS);
++  const prefix = `${website}:${slot}:${url}:`;
++  if (last?.prefix === prefix) return last.proof;
++
++  let nonce = 0;
++  while (Math.clz32(sha256Words(prefix + nonce)[0]) < bits) nonce++;
++
++  last = { prefix, proof: `${slot}.${nonce}` };
++  return last.proof;
++};
