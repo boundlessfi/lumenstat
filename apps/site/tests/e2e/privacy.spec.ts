@@ -26,7 +26,7 @@ test('sets no cookies and stores nothing in the browser', async ({ page, context
   expect(await context.cookies()).toEqual([]);
 
   await scrollThrough(page);
-  await page.getByRole('button', { name: /Copy: Verify command/ }).click();
+  await page.getByRole('button', { name: /Copy: Verify command/ }).last().click();
   await page.locator('#faq summary').first().click();
 
   expect(await context.cookies()).toEqual([]);

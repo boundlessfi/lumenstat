@@ -10,6 +10,15 @@
 }
 @media (min-width: 1024px) {
   .head { margin-bottom: 72px; }
+  .headSplit {
+    max-width: none;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    column-gap: 48px;
+    align-items: end;
+  }
+  /* The eyebrow sits above both columns. */
+  .headSplit > :first-child { grid-column: 1 / -1; }
+  .headSplit > :last-child { padding-bottom: 4px; }
 }
 
 /* ---------- Hero ---------- */
@@ -53,6 +62,10 @@
   .heroGrid { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 24px; }
   .heroCopy { grid-column: 1 / span 5; }
   .heroFigure { grid-column: 6 / span 7; }
+}
+@media (min-width: 1200px) {
+  /* Air between the headline and the figure. */
+  .heroFigure { margin-left: 32px; }
 }
 
 /* ---------- Cards (four checks) ---------- */

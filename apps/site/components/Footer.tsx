@@ -78,10 +78,12 @@ export function Footer({ copy }: { copy: Copy }) {
       </div>
 
       <div className={`container ${styles.legal}`}>
-        <p className="small">{f.trademark}</p>
-        <p className="small">
-          © {new Date().getFullYear()} {site.legalEntity}.
-        </p>
+        <div className={styles.legalInner}>
+          <p className="small">{f.trademark}</p>
+          <p className="small">
+            © {new Date().getFullYear()} {site.legalEntity}.
+          </p>
+        </div>
       </div>
     </footer>
   );

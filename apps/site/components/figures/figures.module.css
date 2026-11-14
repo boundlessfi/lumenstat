@@ -143,7 +143,7 @@
 .sweep {
   position: absolute;
   inset: 1px 0;
-  background: var(--lilac-04);
+  background: var(--lilac-03);
   border-radius: 3px;
   transform-origin: left center;
 }
@@ -231,7 +231,15 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-m);
 }
-.verifyHead { padding: 8px 14px; border-bottom: 1px solid var(--gray-04); }
+.verifyHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 6px 0 14px;
+  border-bottom: 1px solid var(--gray-04);
+}
 .verifyCode {
   margin: 0;
   padding: 12px 14px;

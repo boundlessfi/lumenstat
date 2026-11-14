@@ -48,7 +48,8 @@ function SectionHead({
   lead?: string;
 }) {
   return (
-    <div className={styles.head}>
+    // With a lead, the head splits on desktop: headline left, lead right.
+    <div className={`${styles.head} ${lead ? styles.headSplit : ''}`}>
       <Eyebrow>{eyebrow}</Eyebrow>
       <h2 id={`${id}-title`} className="h2">
         <TwoToneText title={title} />
@@ -78,10 +79,19 @@ function RepoButton({ label }: { label: string }) {
 /** A short title or sentence with a mono detail, used in several sections. */
 function DetailRow({ title, text, detail, i }: { title?: string; text: string; detail: string; i: number }) {
   return (
-    <div className={styles.row} data-reveal style={at(i)}>
-      <dt className={title ? 'h3' : styles.rowSentence}>{title ?? text}</dt>
-      {title ? <dd className={styles.rowText}>{text}</dd> : null}
-      <dd className={`mono ${styles.rowDetail}`}>{detail}</dd>
+    <div className={styles.row}>
+      <dt className={title ? 'h3' : styles.rowSentence} data-reveal style={at(i)}>
+        {title ?? text}
+      </dt>
+      {title ? (
+        <dd className={styles.rowText} data-reveal style={at(i)}>
+          {text}
+        </dd>
+      ) : null}
+      {/* The mono detail does not move: it only fades in. */}
+      <dd className={`mono ${styles.rowDetail}`} data-reveal="fade" style={at(i)}>
+        {detail}
+      </dd>
     </div>
   );
 }
@@ -234,9 +244,7 @@ export function Tracker({ copy }: { copy: Copy }) {
       <SectionHead id="tracker" eyebrow={t.eyebrow} title={t.title} lead={t.lead} />
       <FigureFrame label={t.figure.label} caption={t.figure.caption}>
         <VerifyIsland data={data} aria={t.figure.aria}>
-          <Canvas label={t.figure.aria}>
-            <VerifyStill data={data} />
-          </Canvas>
+          <VerifyStill data={data} aria={t.figure.aria} />
         </VerifyIsland>
       </FigureFrame>
 

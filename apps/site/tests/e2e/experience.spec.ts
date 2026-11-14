@@ -226,7 +226,7 @@ test.describe('keyboard and accessibility', () => {
     test.skip(browserName === 'webkit', 'clipboard permissions are Chromium only in Playwright');
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.goto('/', { waitUntil: 'networkidle' });
-    const button = page.getByRole('button', { name: 'Copy: Verify command' });
+    const button = page.getByRole('button', { name: 'Copy: Verify command' }).last();
     await button.scrollIntoViewIfNeeded();
     await button.click();
     await expect(button).toContainText(microcopy.copied);
@@ -234,7 +234,7 @@ test.describe('keyboard and accessibility', () => {
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(facts.verifyCommand);
     await expect(button).toContainText(microcopy.copy, { timeout: 3000 });
 
-    await page.getByRole('button', { name: 'Copy: Tracker snippet' }).click();
+    await page.getByRole('button', { name: 'Copy: Tracker snippet' }).first().click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(facts.snippet);
   });
 

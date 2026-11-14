@@ -13,6 +13,7 @@
     "test": "vitest run",
     "lint:copy": "node scripts/lint-copy.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
+    "analyze": "next analyze --output",
     "test:e2e": "playwright test",
     "lhci": "lhci autorun"
   },

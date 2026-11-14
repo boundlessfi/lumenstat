@@ -6,9 +6,8 @@ import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode }
 import { microcopy } from '../../../content/copy';
 import { ReplayIcon } from '../../icons';
 import { Controls, ControlButton } from '../Controls';
-import { Canvas } from '../Frame';
 import { useReducedMotion, useSeen } from '../hooks';
-import { MatchBadge, SnippetCode, type VerifyData } from './Still';
+import { MatchBadge, SnippetCode, VerifyPanels, type VerifyData } from './Still';
 import styles from '../figures.module.css';
 
 export type VerifyProps = { data: VerifyData; aria: string };
@@ -41,13 +40,13 @@ export default function VerifyAnimated({ data, aria, children }: VerifyProps & {
               <ReplayIcon />
             </ControlButton>
           </Controls>
-          <Canvas label={aria}>
+          <div className={styles.canvas}>
             <LazyMotion features={domAnimation} strict>
               <MotionConfig reducedMotion="user">
-                <Sequence key={run} data={data} />
+                <Sequence key={run} data={data} aria={aria} />
               </MotionConfig>
             </LazyMotion>
-          </Canvas>
+          </div>
         </>
       ) : (
         children
@@ -69,7 +68,7 @@ function Characters({ text, from = 0 }: { text: string; from?: number }) {
   );
 }
 
-function Sequence({ data }: { data: VerifyData }) {
+function Sequence({ data, aria }: { data: VerifyData; aria: string }) {
   const root = useRef<HTMLDivElement>(null);
   const integrity = useRef<HTMLSpanElement>(null);
   const output = useRef<HTMLSpanElement>(null);
@@ -98,60 +97,63 @@ function Sequence({ data }: { data: VerifyData }) {
 
   return (
     <div ref={root} className={`${styles.verify} ${styles.verifyLive}`} style={greenVars}>
-      <div className={styles.verifyPanel}>
-        <p className={`label ${styles.verifyHead}`}>{data.labels.snippet}</p>
-        <SnippetCode
-          data={data}
-          value={
-            <span ref={integrity} className={styles.integrity}>
-              sha384-
-              <Characters text={data.digest} />
-            </span>
-          }
-        />
-      </div>
-
-      <div className={styles.verifyPanel}>
-        <p className={`label ${styles.verifyHead}`}>{data.labels.terminal}</p>
-        <pre className={styles.verifyCode}>
-          <code>
-            <span className={styles.prompt}>$ </span>
-            {/* The command is shown in full from the start: typing it out would only delay reading. */}
-            {data.command}
-            {'\n'}
-            <span ref={output} className={styles.output}>
+      <VerifyPanels
+        data={data}
+        aria={aria}
+        snippet={
+          <SnippetCode
+            data={data}
+            value={
+              <span ref={integrity} className={styles.integrity}>
+                sha384-
+                <Characters text={data.digest} />
+              </span>
+            }
+          />
+        }
+        terminal={
+          <>
+            <pre className={styles.verifyCode}>
+              <code>
+                <span className={styles.prompt}>$ </span>
+                {/* The command is shown in full from the start: typing it out would only delay reading. */}
+                {data.command}
+                {'\n'}
+                <span ref={output} className={styles.output}>
+                  <m.span
+                    className={styles.waiting}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: [0, 1, 1, 0] }}
+                    transition={{ duration: T.print - T.dots, delay: T.dots, times: [0, 0.1, 0.9, 1] }}
+                  >
+                    …
+                  </m.span>
+                  {chunks.map((chunk, i) => (
+                    <m.span
+                      key={i}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 0.001, delay: T.print + i * T.perChunk }}
+                    >
+                      <Characters text={chunk} from={i * CHUNK} />
+                    </m.span>
+                  ))}
+                </span>
+              </code>
+            </pre>
+            <p className={styles.verifyResult}>
               <m.span
-                className={styles.waiting}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: [0, 1, 1, 0] }}
-                transition={{ duration: T.print - T.dots, delay: T.dots, times: [0, 0.1, 0.9, 1] }}
+                className={styles.matchWrap}
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.2, delay: greenDone, ease: EASE_OUT }}
               >
-                …
+                <MatchBadge label={data.labels.match} />
               </m.span>
-              {chunks.map((chunk, i) => (
-                <m.span
-                  key={i}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.001, delay: T.print + i * T.perChunk }}
-                >
-                  <Characters text={chunk} from={i * CHUNK} />
-                </m.span>
-              ))}
-            </span>
-          </code>
-        </pre>
-        <p className={styles.verifyResult}>
-          <m.span
-            className={styles.matchWrap}
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.2, delay: greenDone, ease: EASE_OUT }}
-          >
-            <MatchBadge label={data.labels.match} />
-          </m.span>
-        </p>
-      </div>
+            </p>
+          </>
+        }
+      />
 
       {rail ? (
         <m.span
@@ -163,7 +165,6 @@ function Sequence({ data }: { data: VerifyData }) {
         />
       ) : null}
 
-      <p className={`small ${styles.release}`}>{data.labels.release}</p>
     </div>
   );
 }

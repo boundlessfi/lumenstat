@@ -27,6 +27,7 @@ npm run build && npm start   # the production build, on the same port
 | `npm run lint:copy` | No em or en dashes, no banned words, no "free", and no SCF wording while `scfAwarded` is false. Checks `content/copy.ts` and the built HTML |
 | `npm run check:bundle` | First-load JavaScript against the budget. Needs a build |
 | `npm run test:e2e` | Playwright, in Chromium and WebKit. Needs a build, and `npx playwright install chromium webkit` once |
+| `npm run analyze` | Writes Next's bundle analyzer report to `.next/diagnostics/analyze`. Run `npx next analyze` to explore it in the browser |
 | `npm run lhci` | Lighthouse, mobile, three runs, with the performance budget as assertions. Needs a build and Chrome |
 
 The browser tests cover the promises the page makes: no request to any other origin, no cookies and nothing in browser storage, all copy in the server HTML, still frames under reduced motion and without JavaScript, no sideways scroll at 320px and 375px, a full keyboard path with visible focus, and a clean axe run.

@@ -163,7 +163,8 @@ function Sequence({ lines, labels, narrow }: { lines: DemoLine[]; labels: Normal
                   className={`label ${styles.tag}`}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: [0, 1, 1, 0] }}
-                  transition={{ duration: T.sweep + 0.5, delay: start + T.sweep, times: [0, 0.18, 0.75, 1] }}
+                  // Appears as the address starts to collapse, so it never sits on top of it.
+                  transition={{ duration: T.collapse + 0.45, delay: collapseAt + 0.05, times: [0, 0.18, 0.75, 1] }}
                 >
                   <CheckIcon width={12} height={12} />
                   {tag}

@@ -42,10 +42,6 @@
 
 .actions { display: flex; align-items: center; gap: 8px; }
 .signin { display: none; }
-.actions .cta { height: 36px; padding: 0 14px; font-size: 14px; }
-@media (pointer: coarse) {
-  .actions .cta { height: 44px; }
-}
 
 /* Mobile disclosure */
 .mobile { display: block; }
