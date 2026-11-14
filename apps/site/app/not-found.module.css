@@ -1,0 +1,12 @@
+.page {
+  display: grid;
+  gap: 16px;
+  align-content: center;
+  justify-items: start;
+  min-height: 100svh;
+  max-width: 640px;
+  margin-inline: auto;
+  padding: 48px var(--gutter);
+}
+.brand { margin-bottom: 16px; }
+.link { color: var(--accent); text-underline-offset: 3px; }

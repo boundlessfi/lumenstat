@@ -1,0 +1,103 @@
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  height: var(--header);
+  background: var(--bg);
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--dur-ui) var(--ease-ui);
+}
+.header[data-scrolled] { border-bottom-color: var(--line); }
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 100%;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  margin-right: auto;
+}
+.wordmark { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
+
+.nav { display: none; margin-right: auto; }
+.nav ul { display: flex; gap: 4px; }
+.nav a, .signin {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radius-s);
+  font-size: 15px;
+  color: var(--text-2);
+  text-decoration: none;
+  transition: color var(--dur-micro) var(--ease-ui);
+}
+.nav a:hover, .signin:hover { color: var(--text); }
+
+.actions { display: flex; align-items: center; gap: 8px; }
+.signin { display: none; }
+
+/* Mobile disclosure */
+.mobile { display: block; }
+.menuButton {
+  height: 36px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--gray-07);
+  border-radius: var(--radius-m);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+@media (pointer: coarse) {
+  .menuButton { height: 44px; }
+}
+.panel {
+  position: absolute;
+  top: var(--header);
+  left: 0;
+  right: 0;
+  padding: 8px var(--gutter) 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  animation: menu-fade 150ms linear;
+}
+.panel[hidden] { display: none; }
+.panel a {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  font-size: 17px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--gray-04);
+}
+.panel li:last-child a { border-bottom: 0; }
+@keyframes menu-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.panel .menuCta {
+  display: none;
+  justify-content: center;
+  margin-top: 12px;
+  border-bottom: 1px solid transparent;
+  font-size: 15px;
+}
+@media (max-width: 479px) {
+  .actions .cta { display: none; }
+  .panel .menuCta { display: flex; }
+}
+
+@media (min-width: 768px) {
+  .brand { margin-right: 16px; }
+  .nav { display: block; }
+  .signin { display: inline-flex; }
+  .mobile { display: none; }
+}
