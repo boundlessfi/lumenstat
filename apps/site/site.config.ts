@@ -11,7 +11,7 @@ export const site = {
   repoUrl: 'https://github.com/boundlessfi/lumenstat',
 
   // D3: docs site. null hides the Docs links.
-  docsUrl: null as string | null,
+  docsUrl: 'https://docs.lumenstat.com' as string | null,
 
   // D4: enrollment mode at launch. 'open' → "Enroll your project". 'approval' → "Request access".
   signupMode: 'open' as 'open' | 'approval',

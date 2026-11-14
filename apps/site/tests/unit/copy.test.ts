@@ -15,7 +15,7 @@ describe('config switches', () => {
   it('default to the safe choices', () => {
     expect(site.repoPublic).toBe(false);
     expect(site.scfAwarded).toBe(false);
-    expect(site.docsUrl).toBeNull();
+    expect(site.docsUrl).toBe('https://docs.lumenstat.com'); // decided: the docs are live
     expect(site.publicStatsUrl).toBeNull();
     expect(site.screenshots).toBe(false);
     expect(site.signupMode).toBe('open');
