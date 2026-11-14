@@ -1,0 +1,18 @@
+# OpenTofu: state (holds the tunnel token), plans, provider cache, real variables.
+# .terraform.lock.hcl is committed.
+*.tfstate*
+*.tfplan
+.terraform/
+crash.log
+*.tfvars
+!*.tfvars.example
+imports.tf
+
+# Ansible: real inventories and secrets stay out of this repo.
+ansible/inventories/*/hosts.yml
+ansible/inventories/*/group_vars/
+ansible/inventories/*/host_vars/
+*.retry
+
+# Anything decrypted from SOPS.
+*.dec.*

@@ -1,0 +1,16 @@
+---
+# Prepares an Ubuntu 24.04 host and deploys the Lumenstat stack on it.
+#   ansible-playbook -i inventories/<env>/hosts.yml site.yml
+#
+# Ansible logs in as the deploy user (a sudoer with an SSH key, not root), the
+# same account deploy/deploy.sh uses: it owns /srv/lumenstat and runs Docker.
+# Facts are gathered as that user; root is used only where a role asks for it.
+
+- name: Prepare the host and deploy Lumenstat
+  hosts: lumenstat
+  roles:
+    - role: base
+      become: true
+    - role: docker
+      become: true
+    - role: lumenstat

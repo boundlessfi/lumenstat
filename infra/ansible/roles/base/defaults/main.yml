@@ -1,0 +1,9 @@
+---
+# Port ufw keeps open for SSH.
+base_ssh_port: "{{ ansible_port | default(22) }}"
+
+# Key-only SSH and no root login. Applied only after the checks in tasks/main.yml.
+base_ssh_hardening: true
+
+# fail2ban with Ubuntu's default sshd jail.
+base_fail2ban: false

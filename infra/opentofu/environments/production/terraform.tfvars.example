@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars (git-ignored). Find both IDs on the zone's overview page.
+account_id = "<cloudflare account id>"
+zone_id    = "<zone id>"
+domain     = "lumenstat.com"
+
+# Optional: where DMARC aggregate reports go. Leave empty for none.
+dmarc_rua = ""
+
+# Docs on Mintlify. Add the domain in the Mintlify dashboard first, then copy
+# the two TXT records it shows here.
+# docs = {
+#   hostname = "docs.lumenstat.com"
+#   verification = {
+#     "_acme-challenge.docs.lumenstat.com"     = "<value from Mintlify>"
+#     "_cf-custom-hostname.docs.lumenstat.com" = "<value from Mintlify>"
+#   }
+# }

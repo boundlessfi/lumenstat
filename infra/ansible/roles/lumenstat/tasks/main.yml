@@ -1,0 +1,121 @@
+---
+# Does what deploy/deploy.sh does: ship the sources to /srv/lumenstat/src and run
+# deploy/bootstrap.sh there as the login user. Touches nothing outside /srv/lumenstat
+# and the stack's own Compose project.
+
+- name: Check that vendor/umami is in place
+  ansible.builtin.stat:
+    path: "{{ lumenstat_repo_root }}/vendor/umami/src"
+  delegate_to: localhost
+  run_once: true
+  register: lumenstat_umami_src
+
+- name: Stop if vendor/umami is missing
+  ansible.builtin.assert:
+    that: lumenstat_umami_src.stat.exists
+    fail_msg: vendor/umami is missing; run scripts/sync-umami.sh first.
+    quiet: true
+  run_once: true
+
+- name: Let the login user run Docker
+  ansible.builtin.user:
+    name: "{{ ansible_facts.user_id }}"
+    groups: docker
+    append: true
+  become: true
+
+- name: Reconnect so the docker group applies
+  ansible.builtin.meta: reset_connection
+
+- name: Create /srv/lumenstat
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ansible_facts.user_id }}"
+    group: "{{ ansible_facts.user_gid }}"
+    mode: "0750"
+  loop:
+    - "{{ lumenstat_root }}"
+    - "{{ lumenstat_root }}/src"
+  become: true
+
+- name: Copy the sources
+  block:
+    - name: Create a local temporary directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: -lumenstat
+      delegate_to: localhost
+      run_once: true
+      register: lumenstat_tmp
+
+    # Same checks as deploy.sh: the released tracker must match the patched
+    # source, and releases are copied into Umami's public folder (served at /v/).
+    - name: Check and stage the tracker releases
+      ansible.builtin.command:
+        chdir: "{{ lumenstat_repo_root }}"
+        cmd: "{{ item }}"
+      loop:
+        - node scripts/build-tracker.mjs --check
+        - scripts/stage-tracker-releases.sh
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
+
+    # Sources only: no dependencies, build output, local env files or git history.
+    - name: Pack the sources
+      ansible.builtin.command:
+        chdir: "{{ lumenstat_repo_root }}"
+        argv: >-
+          {{ ['tar', '--no-xattrs', '-czf', lumenstat_tmp.path ~ '/src.tar.gz']
+             + lumenstat_source_excludes | map('regex_replace', '^', '--exclude=') | list
+             + lumenstat_present_sources }}
+      vars:
+        lumenstat_present_sources: >-
+          {{ lumenstat_sources
+             | map('regex_replace', '^', lumenstat_repo_root ~ '/')
+             | select('ansible.builtin.exists')
+             | map('ansible.builtin.relpath', lumenstat_repo_root)
+             | list }}
+      environment:
+        COPYFILE_DISABLE: "1" # no macOS ._ files
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
+
+    - name: Unpack the sources on the server
+      ansible.builtin.unarchive:
+        src: "{{ lumenstat_tmp.path }}/src.tar.gz"
+        dest: "{{ lumenstat_root }}/src"
+
+  always:
+    - name: Remove the local temporary directory
+      ansible.builtin.file:
+        path: "{{ lumenstat_tmp.path }}"
+        state: absent
+      delegate_to: localhost
+      run_once: true
+      when: lumenstat_tmp.path is defined
+
+# Creates /srv/lumenstat/.env with random secrets on the first run (mode 600),
+# builds, starts the stack and replaces Umami's default admin password.
+- name: Run deploy/bootstrap.sh
+  ansible.builtin.command:
+    argv: [bash, "{{ lumenstat_root }}/src/deploy/bootstrap.sh"]
+  register: lumenstat_bootstrap
+  changed_when: true # always rebuilds and reconciles the stack, like deploy/deploy.sh
+
+- name: Show the stack status
+  ansible.builtin.debug:
+    var: lumenstat_bootstrap.stdout_lines
+
+- name: Write the tunnel token to the env file
+  ansible.builtin.lineinfile:
+    path: "{{ lumenstat_root }}/.env"
+    regexp: ^CLOUDFLARE_TUNNEL_TOKEN=
+    line: CLOUDFLARE_TUNNEL_TOKEN={{ lumenstat_cloudflare_tunnel_token }}
+    mode: "0600"
+  when: lumenstat_cloudflare_tunnel_token | length > 0
+  no_log: true
+  diff: false
+  notify: Start the tunnel

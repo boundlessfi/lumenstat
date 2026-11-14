@@ -1,0 +1,91 @@
+---
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ ['unattended-upgrades', 'ufw'] + (['fail2ban'] if base_fail2ban else []) }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Turn on unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    owner: root
+    group: root
+    mode: "0644"
+
+# Firewall. Additive only: rules other projects added stay, nothing is reset.
+# Docker-published ports bypass ufw; the Lumenstat stack publishes none.
+- name: Allow SSH through the firewall
+  community.general.ufw:
+    rule: allow
+    port: "{{ base_ssh_port | string }}"
+    proto: tcp
+    comment: ssh
+
+- name: Deny other incoming connections by default
+  community.general.ufw:
+    direction: incoming
+    default: deny
+
+- name: Enable the firewall
+  community.general.ufw:
+    state: enabled
+
+# SSH: key-only, no root. The checks below make sure this cannot lock out the
+# account Ansible is using: it must not be root and must already have a valid key.
+- name: Harden SSH
+  when: base_ssh_hardening
+  block:
+    - name: Refuse to disable root login while connected as root
+      ansible.builtin.assert:
+        that: ansible_facts.user_id != 'root'
+        fail_msg: >-
+          Ansible is logged in as root. Create a sudo user with your SSH key, set it as
+          ansible_user, and run again (or set base_ssh_hardening: false).
+        quiet: true
+
+    - name: Check that the login user has a valid authorized key
+      ansible.builtin.command:
+        argv: [ssh-keygen, -l, -f, "{{ ansible_facts.user_dir }}/.ssh/authorized_keys"]
+      become: false
+      register: base_authorized_keys
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse to turn off password login without a key
+      ansible.builtin.assert:
+        that: base_authorized_keys.rc == 0
+        fail_msg: >-
+          {{ ansible_facts.user_dir }}/.ssh/authorized_keys of {{ ansible_facts.user_id }} has no
+          valid public key, so password login stays on. Add your key and run again.
+        quiet: true
+
+    # Ubuntu reads sshd_config.d/*.conf first, and the first value wins, so this
+    # file must sort before 50-cloud-init.conf (which may allow passwords).
+    - name: Write the SSH hardening drop-in
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-hardening.conf
+        content: |
+          # Managed by Ansible (infra/ansible, role base).
+          PermitRootLogin no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+        owner: root
+        group: root
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+      notify: Reload sshd
+
+- name: Run fail2ban
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    state: started
+    enabled: true
+  when: base_fail2ban
+
+- name: Apply the SSH changes now
+  ansible.builtin.meta: flush_handlers

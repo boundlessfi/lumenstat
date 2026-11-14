@@ -1,0 +1,15 @@
+---
+# Handlers run in this order: check the whole configuration, then reload.
+# A reload keeps open sessions, including Ansible's own.
+- name: Check the sshd configuration
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false
+  become: true
+  listen: Reload sshd
+
+- name: Reload the ssh service
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded
+  become: true
+  listen: Reload sshd

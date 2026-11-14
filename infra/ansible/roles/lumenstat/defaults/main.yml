@@ -1,0 +1,29 @@
+---
+lumenstat_root: /srv/lumenstat
+
+# The repository checkout on the machine running Ansible (infra/ansible/../..).
+lumenstat_repo_root: "{{ playbook_dir | dirname | dirname }}"
+
+# What deploy/deploy.sh ships. Paths that do not exist (packages) are skipped.
+lumenstat_sources:
+  - apps
+  - deploy
+  - vendor/umami
+  - patches
+  - packages
+  - README.md
+  - LICENSE
+
+lumenstat_source_excludes:
+  - node_modules
+  - .next
+  - .git
+  - .env
+  - .env.*
+  - .claude
+  - "*.tsbuildinfo"
+  - examples/test-site/*.html
+
+# Secret: from `tofu output -raw tunnel_token`. When set, it is written to
+# /srv/lumenstat/.env and the tunnel is (re)started. Never put it in git.
+lumenstat_cloudflare_tunnel_token: ""

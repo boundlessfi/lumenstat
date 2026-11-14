@@ -1,0 +1,13 @@
+---
+# Copy to hosts.yml (git-ignored) and fill in the real server. Placeholders only.
+# Staging needs its own host: the stack always lives in /srv/lumenstat.
+all:
+  children:
+    lumenstat:
+      hosts:
+        lumenstat-staging:
+          ansible_host: staging.example.com
+          ansible_user: deploy # sudoer with your SSH key; not root
+          # ansible_port: 22
+      # Secret: the staging tunnel token from `tofu output -raw tunnel_token`.
+      # Do not write it here; see infra/README.md (Secrets).
