@@ -3,17 +3,23 @@ import type { Metadata } from 'next';
 import { rangeWindow } from '@/lib/range';
 import { Banner, Card, CopyText, Heading, Text } from '@/lib/sds';
 import { loadApiTenant, loadWebSummary } from '@/lib/server/projects';
+import { enrollmentForTeam } from '@/lib/server/enrollment';
 import { umami } from '@/lib/server/umami';
 import { requireProject } from '@/lib/server/viewer';
+import { IngestKeyPanel } from './IngestKeyPanel';
 
 export const metadata: Metadata = { title: 'Setup' };
 
 const PUBLIC_UMAMI_URL = process.env.PUBLIC_UMAMI_URL ?? 'http://localhost:3000';
 const PUBLIC_COLLECTOR_URL = process.env.PUBLIC_COLLECTOR_URL ?? 'http://localhost:4318';
+/** The pinned tracker release shown in snippets (packages/tracker/releases). */
+const TRACKER_VERSION = process.env.TRACKER_VERSION ?? '1.0.0';
+/** The collect host baked into tracker releases; other deployments add data-host-url. */
+const RELEASE_COLLECT_HOST = 'https://t.lumenstat.com';
 
 function Status({ ok, label, detail }: { ok: boolean; label: string; detail: string }) {
   return (
-    <div className="row" style={{ gap: 10 }}>
+    <div className="row" style={{ gap: 10, flexWrap: 'nowrap' }}>
       <span
         className="dot"
         aria-hidden="true"
@@ -31,10 +37,11 @@ export default async function GetStartedPage({ params }: { params: Promise<{ pro
   const { viewer, project } = await requireProject(projectId);
   const day = rangeWindow('24h');
 
-  const [web, api, script] = await Promise.all([
+  const [web, api, script, enrollment] = await Promise.all([
     loadWebSummary(viewer.token, project.id, day),
     loadApiTenant(project.id, day),
-    umami.trackerScript().catch(() => null),
+    umami.trackerScript(TRACKER_VERSION).catch(() => null),
+    enrollmentForTeam(project.id),
   ]);
   const sri = script ? `sha384-${createHash('sha384').update(script).digest('base64')}` : null;
   const tenant = api && api !== 'unavailable' ? api : null;
@@ -42,18 +49,14 @@ export default async function GetStartedPage({ params }: { params: Promise<{ pro
   const snippet = (websiteId: string) =>
     [
       '<script defer',
-      `  src="${PUBLIC_UMAMI_URL}/script.js"`,
+      `  src="${PUBLIC_UMAMI_URL}/v/${TRACKER_VERSION}/l.js"`,
       sri ? `  integrity="${sri}"` : null,
       '  crossorigin="anonymous"',
+      PUBLIC_UMAMI_URL !== RELEASE_COLLECT_HOST ? `  data-host-url="${PUBLIC_UMAMI_URL}"` : null,
       `  data-website-id="${websiteId}"></script>`,
     ]
       .filter(Boolean)
       .join('\n');
-
-  const otel = [
-    `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${PUBLIC_COLLECTOR_URL}/v1/traces`,
-    'OTEL_EXPORTER_OTLP_TRACES_HEADERS=x-scf-ingest-key=<your ingest key>',
-  ].join('\n');
 
   return (
     <div className="page">
@@ -99,11 +102,15 @@ export default async function GetStartedPage({ params }: { params: Promise<{ pro
               Website snippet
             </Heading>
             <Text as="p" size="sm">
-              Paste into the <code>&lt;head&gt;</code> of every page. The integrity hash pins this exact tracker: if its bytes change, the
-              browser refuses to run it, and you upgrade on purpose.
+              Paste into the <code>&lt;head&gt;</code> of every page. Tracker {TRACKER_VERSION} lives at its own URL and never changes; the
+              integrity hash makes the browser refuse any other bytes, so you upgrade on purpose.
             </Text>
             {web.websites.length === 0 ? (
-              <Banner variant="secondary">No website registered for this project yet. Ask an SCF operator to add your domain.</Banner>
+              <Banner variant="secondary">
+                {enrollment?.status === 'pending'
+                  ? 'Your snippet appears here once an SCF operator approves the sign-up.'
+                  : 'No website registered for this project yet. Ask an SCF operator to add your domain.'}
+              </Banner>
             ) : (
               web.websites.map(site => (
                 <div className="stack" key={site.id} style={{ gap: 6 }}>
@@ -134,10 +141,7 @@ export default async function GetStartedPage({ params }: { params: Promise<{ pro
               Add a second OpenTelemetry trace exporter next to the one you already have. Your own APM keeps full traces; Lumenstat keeps
               only request counts, status codes and timings per route.
             </Text>
-            <pre className="snippet">{otel}</pre>
-            <Text as="p" size="sm" addlClassName="muted">
-              Ingest keys are issued by an SCF operator during the MVP. Self-service keys arrive with enrollment.
-            </Text>
+            <IngestKeyPanel projectId={project.id} collectorUrl={PUBLIC_COLLECTOR_URL} />
           </div>
         </Card>
       </div>

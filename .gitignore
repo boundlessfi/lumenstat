@@ -11,3 +11,6 @@ examples/test-site/*.html
 .next/
 *.tsbuildinfo
 .env*.local
+
+# npm package build output (copied from packages/tracker/releases at pack time)
+packages/tracker/dist/

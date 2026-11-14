@@ -1,0 +1,124 @@
+---
+title: "Add the tracker"
+description: "Put the pinned Lumenstat script on your site, confirm page views arrive, and measure more than one domain."
+icon: "code"
+---
+
+The tracker is one `<script>` tag pinned to an exact release. It records page views and custom events without cookies, and the integrity hash in the tag makes the browser refuse to run any file except the one that was published. Your site must be served over HTTPS, or its events are flagged instead of counted.
+
+## Before you start
+
+- Your project is enrolled at [app.lumenstat.com/signup](https://app.lumenstat.com/signup) and approved. While a sign-up waits for an SCF operator, the **Setup** page shows no snippet.
+- The domain you want to measure is one of your project's domains. **Settings** → **Website domains** lists them.
+- Your pages are served over HTTPS.
+
+<Steps>
+  <Step title="Copy your snippet from Setup">
+    Sign in at [app.lumenstat.com](https://app.lumenstat.com), open your project and go to **Setup**. Under **Website snippet** there is one snippet per website, labelled with its domain. Click **Copy snippet** next to the domain you are adding.
+
+    The `data-website-id` value is your website id, a UUID. It is not a secret: it ships in the HTML of every page you serve.
+  </Step>
+
+  <Step title="Paste it into the head of every page">
+    ```html
+    <script
+      defer
+      src="https://t.lumenstat.com/v/1.0.0/l.js"
+      integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+      crossorigin="anonymous"
+      data-website-id="YOUR-WEBSITE-ID"
+    ></script>
+    ```
+
+    | Attribute | What it does |
+    | --- | --- |
+    | `defer` | Downloads the script without blocking rendering and runs it after the document is parsed. |
+    | `src` | An exact release. The file at `/v/1.0.0/l.js` never changes, and it is served with a one-year immutable cache. |
+    | `integrity` | The SHA-384 hash of that file. The browser runs the script only if the bytes it receives produce this hash. |
+    | `crossorigin="anonymous"` | Fetches the file in CORS mode, which the browser needs before it can check the integrity of a file from another origin. Without it, the script is blocked. |
+    | `data-website-id` | The website the events belong to. |
+
+    Change `src` and `integrity` only together, when you upgrade to a new release. Every other attribute the tracker reads is listed in [Tracker attributes](/reference/tracker-attributes).
+
+    The tracker records a page view on load and on every `history.pushState` or `history.replaceState`, so client-side navigation in a single-page app is counted with no extra code. Include the snippet once per page: two copies send every page view twice.
+
+    Using a framework? [Framework recipes](/web/frameworks) has the same tag for Next.js, Vite, Astro, SvelteKit and Nuxt.
+  </Step>
+
+  <Step title="Deploy over HTTPS">
+    Ship the change to the domain you enrolled, served over HTTPS. The first layer of [bot and inflation defense](/trust/bot-defense) requires the Fetch Metadata headers (`Sec-Fetch-Mode`, `Sec-Fetch-Site`) that browsers send only in a secure context. An event without them is flagged as `not_browser_fetch` and never counted.
+
+    {/* TODO: confirm with a test page served over plain HTTP. The Fetch Metadata spec keys on the request URL, and the tracker always posts to https://t.lumenstat.com/e, so an HTTP page may still send Sec-Fetch-* headers. If it does, reword the reason above; HTTPS stays the stated requirement (README.md, AGENTS.md). */}
+  </Step>
+
+  <Step title="Check that data is arriving">
+    Open a page of your site in a normal browser window, then reload **Setup**. Under **Is data arriving?**, the **Website** line gets a green dot and reads, for example, "3 page views in the last 24 hours". Until then it reads "waiting for the first page view".
+
+    The check is computed each time **Setup** loads, and it sums every website in the project. It counts only page views that passed every check. A visit that was flagged does not turn it green: it appears on the **Website** page under **Flagged, not counted**, with the reason.
+  </Step>
+</Steps>
+
+Your numbers are now on **Overview** and **Website**. [Your numbers](/dashboard/your-numbers) explains each one.
+
+## Measure more than one domain
+
+Each domain is its own website today, with its own website id and its own snippet on **Setup**.
+
+- **Subdomains are included.** An event counts when the browser sends it from the website's domain or any subdomain of it. The `example.org` website accepts events from `www.example.org` and `docs.example.org`, so those need no website of their own.
+- **Use the snippet that belongs to the domain.** The `example.org` snippet placed on `example.com` sends events that are flagged as `origin_mismatch` and never counted.
+- **Visitors are summed across websites.** The project's totals add up each website's unique visitors, so a person who visits two of your domains on the same day counts twice.
+- **Adding a domain.** Sign-up accepts up to five domains. To add one later, ask an SCF operator.
+
+<Note>
+  Several domains under one website, with one website id and one combined visitor count, is planned. Until it ships, use one website per domain.
+  {/* TODO: add the milestone. README.md lists "Multiple domains per Umami website" under "Not built yet" without one, and project/roadmap.mdx does not mention it. */}
+</Note>
+
+## Content Security Policy
+
+If your site sends a `Content-Security-Policy` header, allow the tracker's host for both loading the script and sending events. The tracker posts each event to `https://t.lumenstat.com/e`.
+
+```text
+script-src  'self' https://t.lumenstat.com;
+connect-src 'self' https://t.lumenstat.com;
+```
+
+Merge these sources into your existing directives rather than replacing them.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="The console shows an integrity error">
+    The bytes at `src` do not produce the hash in `integrity`, so the browser blocked the script. Almost always the two values come from different releases, or one was edited by hand. Copy both again from **Setup** or from [`releases.json`](https://github.com/boundlessfi/lumenstat/blob/main/packages/tracker/releases.json). [Verify the tracker](/web/verify-the-tracker) shows how to check the hash yourself.
+  </Accordion>
+
+  <Accordion title="The console says the request is not CORS enabled">
+    The `crossorigin="anonymous"` attribute is missing, so the browser cannot check the integrity of a cross-origin file and blocks it. Some templating layers drop unknown attributes. Check the rendered HTML, not your source.
+  </Accordion>
+
+  <Accordion title="Is data arriving? stays amber">
+    Open your browser's developer tools on your site, go to the Network tab and reload.
+
+    - **No request to `t.lumenstat.com/e`:** the tracker decided not to send. Check that the page's hostname is listed in `data-domains` if you set it, that `data-do-not-track="true"` is not set while your browser sends Do Not Track, that no extension blocks the request, and that your Content Security Policy allows it.
+    - **A request with a response that contains `"beep":"boop"`:** the collect endpoint received the event and did not count it. Flagged events and requests from known bots get this same reply, so a script cannot tell why. Open **Website** and read the reason under **Flagged, not counted**. "Sent from another domain" means the page's domain is not one of your website's domains.
+    - **A request with a response that contains a `cache` token:** the event was counted. Reload **Setup** to see it.
+  </Accordion>
+
+  <Accordion title="Setup says it could not compute the integrity hash">
+    The dashboard computes the hash from the tracker file each time **Setup** loads. When the file is unreachable, the snippet is shown without `integrity`. Do not ship it that way. Use the `integrity` value from [`releases.json`](https://github.com/boundlessfi/lumenstat/blob/main/packages/tracker/releases.json) for the version in `src`.
+  </Accordion>
+
+  <Accordion title="Setup shows no snippet">
+    "Your snippet appears here once an SCF operator approves the sign-up" means your enrollment is waiting in the approval queue. "No website registered for this project yet" means the project has no website: ask an SCF operator to add your domain.
+  </Accordion>
+
+  <Accordion title="Your own visits are counted">
+    The tracker never writes to the browser's storage, but it reads one key so you can exclude a browser. On your site, open the developer console and run:
+
+    ```js
+    localStorage.setItem('umami.disabled', '1');
+    ```
+
+    That browser sends nothing for this site from then on. Run `localStorage.removeItem('umami.disabled')` to undo it, and do so before you test **Is data arriving?** from that browser.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  writer:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/writer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+
+  dashboard:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/dashboard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+  umami-patches:
+    name: Umami patches and tracker release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Apply the patches to the pinned Umami tag
+        run: |
+          git config --global user.name ci && git config --global user.email ci@localhost
+          scripts/sync-umami.sh
+      - name: Install Umami dependencies
+        working-directory: vendor/umami
+        run: npx -y pnpm@12.3.4 install --frozen-lockfile --ignore-scripts
+      - name: SCF patch tests
+        working-directory: vendor/umami
+        run: npx -y pnpm@12.3.4 vitest run src/lib/scf
+      - name: Tracker type check
+        working-directory: vendor/umami
+        run: npx -y pnpm@12.3.4 check:tracker
+      - name: Released trackers rebuild byte for byte
+        run: node scripts/build-tracker.mjs --check

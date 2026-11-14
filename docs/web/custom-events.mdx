@@ -1,0 +1,137 @@
+---
+title: "Custom events"
+description: "Count actions such as wallet connections and sign-ups with umami.track or data attributes, and keep personal data out of them."
+icon: "mouse-pointer-click"
+---
+
+Custom events count actions that are not page views: a wallet connected, a swap submitted, a sign-up completed. They are sent by the same tracker, pass the same [bot and inflation checks](/trust/bot-defense), and appear by name on the **Website** page under **Custom events**. Whatever you put in an event is stored as you sent it, so it must not identify a person.
+
+The tracker exposes Umami's API unchanged: `umami.track()` in code, or a `data-umami-event` attribute in HTML.
+
+## Track from code
+
+```js
+// An event with a name only.
+umami.track('connect-wallet');
+
+// An event with data.
+umami.track('swap-submitted', { pair: 'XLM/USDC', amount_band: '100-1k' });
+```
+
+`umami` exists once the tracker has run. The tag is `defer`, so code that can run earlier should check for it. A call made before the tracker loads is not queued: it is lost.
+
+```ts lib/analytics.ts
+type EventData = Record<string, string | number | boolean>;
+
+declare global {
+  interface Window {
+    umami?: { track: (name: string, data?: EventData) => Promise<void> };
+  }
+}
+
+export function track(name: string, data?: EventData): void {
+  void window.umami?.track(name, data);
+}
+```
+
+`umami.track()` with no arguments records a page view for the current URL. You only need it if you turned automatic page views off.
+
+## Track clicks with attributes
+
+Give any element a `data-umami-event` attribute. Each `data-umami-event-<key>` attribute on the same element becomes a property of the event data.
+
+```html
+<button data-umami-event="connect-wallet" data-umami-event-wallet="freighter">
+  Connect wallet
+</button>
+```
+
+This click sends the event `connect-wallet` with the data `{ "wallet": "freighter" }`. Attribute values are always strings.
+
+- **Clicks inside the element count.** The tracker looks for the nearest ancestor with `data-umami-event`, so a click on an icon inside the button is tracked.
+- **Links wait for the event.** For an `<a>` that opens in the same tab, the tracker holds the navigation, sends the event, then follows the link. Links with `target="_blank"`, middle clicks and clicks with Ctrl, Shift or Cmd are not delayed.
+- **Attributes need automatic tracking.** The click listener is installed together with automatic page views. With `data-auto-track="false"` on the tracker tag, attributes do nothing and only `umami.track()` works. To stop automatic page views but keep attribute tracking, set `data-auto-pageview="false"` instead.
+
+## Event data rules
+
+| Field | Rule |
+| --- | --- |
+| Event name | Up to 50 characters. Longer names are cut. |
+| Event name and `data-tag` | Must not start with `=`, `+`, `-`, `@`, a tab or a carriage return. The collect endpoint rejects the whole event, and the tracker does not report the error. |
+| Numbers | Stored to four decimal places. A number whose absolute value reaches 10<sup>15</sup>, outside an array, rejects the event. |
+| Strings | Up to 500 characters. |
+| Arrays | Stored as one string, up to 500 characters. |
+| Objects | Up to 50 properties, and no more than 32 levels deep. An array counts as one property. |
+
+## Name events for the report
+
+The **Custom events** panel lists event names with their counts for the selected range, top eight across your project's websites. Choose names you want to read there.
+
+- Use a short verb phrase in lowercase with hyphens: `connect-wallet`, `swap-submitted`, `signup-completed`.
+- Name what happened, not where it happened. Put the place in the data: `{ "location": "header" }`.
+- Keep ids out of names. `swap-8f3a` creates one row per swap and buries the rest of the list.
+
+The dashboard shows event names and counts. Event data is stored with each event but is not broken down in the dashboard yet.
+
+{/* TODO: is a breakdown of event data planned, and in which milestone? It is not listed in project/roadmap.mdx. */}
+
+## What not to put in events
+
+<Warning>
+  Lumenstat strips query strings and never stores IP addresses, but it cannot tell personal data inside an event from anything else. Event names and data are stored as sent and are visible to everyone on your project and to SCF operators.
+</Warning>
+
+Never send:
+
+- **Contact details and account ids:** email addresses, names, phone numbers, usernames, ids from your own database.
+- **Stellar identifiers tied to a visitor:** account (`G…`) and muxed (`M…`) addresses, federation addresses, and transaction hashes from the visitor's own activity. An address is pseudonymous, but it links to everything that account has done on chain.
+- **Secrets:** secret keys, seed phrases, API keys, session tokens, JWTs.
+- **Free text a visitor typed:** search terms, form fields, messages.
+
+Send categories instead: the wallet type (`freighter`), the network (`mainnet`), an asset pair (`XLM/USDC`), an amount band (`100-1k`).
+
+### Do not identify visitors
+
+The tracker also carries Umami's `umami.identify()` and the `data-distinct-id` attribute. Do not use either. Lumenstat counts a visitor with a hash that includes a random salt, and the salt is replaced every UTC day and deleted after 48 hours, so no one can link a visitor across days. A distinct id is whatever value you pass, stored with the visitor's session and its events. When it stays the same from one day to the next, it re-links exactly what the daily salt is there to separate.
+
+### Page URLs and titles are stored too
+
+Every page view stores the page path with its `#fragment`, the referrer's domain and path, and the page title, each up to 500 characters. Query strings are removed except `utm_*` tags. If your routes or titles contain a visitor's address, such as `/account/GABC…`, it is stored with each view.
+
+Rewrite those values in the browser before they are sent. Define a function on `window` and name it in `data-before-send`. The tracker calls it with each payload and sends what it returns, or nothing if it returns `null`.
+
+```html
+<script>
+  // Replaces Stellar account, contract and muxed addresses before the tracker sends them.
+  function lumenstatRedact(type, payload) {
+    const placeholder = { G: '{account}', C: '{contract}', M: '{muxed}' };
+    const address = /\b(?:[GC][A-Z2-7]{55}|M[A-Z2-7]{68})\b/g;
+    for (const key of ['url', 'referrer', 'title']) {
+      if (typeof payload[key] === 'string') {
+        payload[key] = payload[key].replace(address, match => placeholder[match[0]]);
+      }
+    }
+    return payload;
+  }
+</script>
+<script
+  defer
+  src="https://t.lumenstat.com/v/1.0.0/l.js"
+  integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+  crossorigin="anonymous"
+  data-website-id="YOUR-WEBSITE-ID"
+  data-before-send="lumenstatRedact"
+></script>
+```
+
+The proof of JavaScript is computed from the payload after your function runs, so a rewritten URL still passes the checks. The placeholders match the ones Lumenstat uses for API routes. If your Content Security Policy blocks inline scripts, load the function from a file of your own before the tracker tag. If your fragments carry state, `data-exclude-hash="true"` drops them from every URL.
+
+## Events from a server are not counted
+
+An event must come from the tracker running in a visitor's browser. A request posted to the collect endpoint from your backend carries no browser `Origin`, no Fetch Metadata headers and no proof of JavaScript, so it is flagged and never counted. To measure what happens on your servers, use [API analytics](/api/overview).
+
+## Limits
+
+- Visitors who block the tracker or run without JavaScript send no events.
+- Events called before the tracker has loaded are dropped, not queued.
+- The tracker does not report rejected events. Test a new event once and confirm it appears on the **Website** page before you rely on it.

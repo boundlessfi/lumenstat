@@ -1,0 +1,234 @@
+---
+title: "Framework recipes"
+description: "The pinned tracker tag for plain HTML, Next.js, React with Vite, Astro, SvelteKit and Nuxt, with preview deploys kept out of your numbers."
+icon: "layers"
+---
+
+Every recipe below renders the same tag: the release URL, its integrity hash, `crossorigin="anonymous"` and your website id. Put it in the one place your framework renders on every page, and render it once. Each recipe also sets `data-domains`, so preview builds and local development send nothing.
+
+Replace `YOUR-WEBSITE-ID` with the id from your project's **Setup** page, and `example.org,www.example.org` with the exact hostnames you serve in production.
+
+## Keep previews and local development out
+
+The tracker reads `data-domains` as a comma-separated list of hostnames. When it is set, the tracker sends nothing unless `location.hostname` is exactly one of them. Without it, two things go wrong:
+
+- **Previews on a subdomain are counted.** The collect endpoint accepts events from your website's domain and every subdomain of it, so a preview at `preview.example.org` passes the origin check and adds to your production numbers.
+- **Previews on another domain and `localhost` are flagged.** They fail the origin check as `origin_mismatch`. They are never counted, but they fill your **Flagged, not counted** card with your own traffic.
+
+The match is exact, not by suffix. List `www.example.org` and `example.org` separately if both serve pages.
+
+<Tabs>
+  <Tab title="HTML">
+    Paste the tag into the `<head>` of every page, or of the shared template your pages are built from.
+
+    ```html index.html
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <title>Example</title>
+        <script
+          defer
+          src="https://t.lumenstat.com/v/1.0.0/l.js"
+          integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+          crossorigin="anonymous"
+          data-website-id="YOUR-WEBSITE-ID"
+          data-domains="example.org,www.example.org"
+        ></script>
+      </head>
+      <body>
+        ...
+      </body>
+    </html>
+    ```
+  </Tab>
+
+  <Tab title="Next.js">
+    For the App Router, render `next/script` from the root layout. `strategy="afterInteractive"` loads the tracker after hydration. `next/script` passes `integrity`, `crossOrigin` and the `data-*` props through to the `<script>` element.
+
+    <CodeGroup>
+      ```tsx components/lumenstat-script.tsx
+      import Script from 'next/script';
+
+      // Release 1.0.0 never changes; the integrity hash makes browsers refuse any other bytes.
+      const TRACKER_SRC = 'https://t.lumenstat.com/v/1.0.0/l.js';
+      const TRACKER_INTEGRITY =
+        'sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3';
+      const WEBSITE_ID = 'YOUR-WEBSITE-ID';
+      // Previews and other hosts load the script but send nothing.
+      const TRACKED_HOSTS = 'example.org,www.example.org';
+
+      export function LumenstatScript() {
+        return (
+          <Script
+            src={TRACKER_SRC}
+            integrity={TRACKER_INTEGRITY}
+            crossOrigin="anonymous"
+            data-website-id={WEBSITE_ID}
+            data-domains={TRACKED_HOSTS}
+            strategy="afterInteractive"
+          />
+        );
+      }
+      ```
+
+      ```tsx app/layout.tsx
+      import type { ReactNode } from 'react';
+      import { LumenstatScript } from '@/components/lumenstat-script';
+
+      export default function RootLayout({ children }: { children: ReactNode }) {
+        return (
+          <html lang="en">
+            <body>
+              {children}
+              <LumenstatScript />
+            </body>
+          </html>
+        );
+      }
+      ```
+    </CodeGroup>
+
+    Write `crossOrigin` in camel case: it is the React prop that renders `crossorigin`. To leave the script out of non-production builds entirely, return `null` from `LumenstatScript` based on an environment variable your production deploys set. Keep `data-domains` as well: it also covers a production build that someone runs on another host.
+  </Tab>
+
+  <Tab title="React (Vite)">
+    Vite serves `index.html` from the project root as the entry page. Add the tag to its `<head>`. Vite leaves a classic script with an absolute URL as written.
+
+    ```html index.html
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Example</title>
+        <script
+          defer
+          src="https://t.lumenstat.com/v/1.0.0/l.js"
+          integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+          crossorigin="anonymous"
+          data-website-id="YOUR-WEBSITE-ID"
+          data-domains="example.org,www.example.org"
+        ></script>
+      </head>
+      <body>
+        <div id="root"></div>
+        <script type="module" src="/src/main.tsx"></script>
+      </body>
+    </html>
+    ```
+
+    Route changes made with React Router, or any router that calls `history.pushState`, are counted as page views. Do not also render the tag from a React component.
+  </Tab>
+
+  <Tab title="Astro">
+    Add the tag to the layout every page uses. `is:inline` tells Astro to render the tag exactly as written instead of processing and bundling it.
+
+    ```astro src/layouts/Layout.astro
+    ---
+    const { title } = Astro.props;
+    ---
+
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <title>{title}</title>
+        <script
+          is:inline
+          defer
+          src="https://t.lumenstat.com/v/1.0.0/l.js"
+          integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+          crossorigin="anonymous"
+          data-website-id="YOUR-WEBSITE-ID"
+          data-domains="example.org,www.example.org"
+        ></script>
+      </head>
+      <body>
+        <slot />
+      </body>
+    </html>
+    ```
+
+    If some pages use a different layout, add the tag there too, or move it into a shared head component. One copy per page.
+  </Tab>
+
+  <Tab title="SvelteKit">
+    `src/app.html` is the page template for every route. Put the tag in its `<head>`, before `%sveltekit.head%`.
+
+    ```html src/app.html
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <script
+          defer
+          src="https://t.lumenstat.com/v/1.0.0/l.js"
+          integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+          crossorigin="anonymous"
+          data-website-id="YOUR-WEBSITE-ID"
+          data-domains="example.org,www.example.org"
+        ></script>
+        %sveltekit.head%
+      </head>
+      <body data-sveltekit-preload-data="hover">
+        <div style="display: contents">%sveltekit.body%</div>
+      </body>
+    </html>
+    ```
+
+    If you set a Content Security Policy in `svelte.config.js` under `kit.csp`, add `https://t.lumenstat.com` to `script-src` and `connect-src`.
+  </Tab>
+
+  <Tab title="Nuxt">
+    Use one of the two options, not both. `app.head` in `nuxt.config.ts` adds the tag to every page. `useHead` in `app.vue` does the same from the root component.
+
+    <CodeGroup>
+      ```ts nuxt.config.ts
+      export default defineNuxtConfig({
+        app: {
+          head: {
+            script: [
+              {
+                src: 'https://t.lumenstat.com/v/1.0.0/l.js',
+                defer: true,
+                integrity: 'sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3',
+                crossorigin: 'anonymous',
+                'data-website-id': 'YOUR-WEBSITE-ID',
+                'data-domains': 'example.org,www.example.org',
+              },
+            ],
+          },
+        },
+      });
+      ```
+
+      ```vue app.vue
+      <script setup lang="ts">
+      useHead({
+        script: [
+          {
+            src: 'https://t.lumenstat.com/v/1.0.0/l.js',
+            defer: true,
+            integrity: 'sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3',
+            crossorigin: 'anonymous',
+            'data-website-id': 'YOUR-WEBSITE-ID',
+            'data-domains': 'example.org,www.example.org',
+          },
+        ],
+      });
+      </script>
+
+      <template>
+        <NuxtPage />
+      </template>
+      ```
+    </CodeGroup>
+  </Tab>
+</Tabs>
+
+## Check the result
+
+Load a production page, open the developer tools and confirm two things: the rendered `<script>` element carries `integrity` and `crossorigin`, and the Network tab shows a `POST` to `https://t.lumenstat.com/e` with a response that contains a `cache` token. Then reload **Setup** and look at **Is data arriving?**. If something is off, the troubleshooting list in [Add the tracker](/web/add-the-tracker#troubleshooting) covers each failure.
+
+On a preview or on `localhost`, the Network tab should show no request to `/e` at all. That is `data-domains` working.

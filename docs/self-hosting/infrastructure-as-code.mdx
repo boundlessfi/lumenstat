@@ -1,0 +1,322 @@
+---
+title: "Infrastructure as code"
+description: "The OpenTofu and Ansible code for staging and production, what each part manages, and how to adopt a zone and tunnel set up by hand."
+icon: "file-code"
+---
+
+[`infra/`](https://github.com/boundlessfi/lumenstat/tree/main/infra) describes the [one-server setup](/self-hosting/overview) as code. OpenTofu manages the Cloudflare side: the tunnel and its routes, the DNS records, the zone settings and the sign-up rate limit. Ansible prepares an Ubuntu 24.04 host and deploys the stack the same way `deploy/deploy.sh` does. `deploy.sh` keeps working on its own; this is the repeatable version of it.
+
+## Layout
+
+```text
+infra/
+├── README.md
+├── .gitignore                      state, *.tfvars, imports.tf, real inventories
+├── opentofu/
+│   ├── modules/
+│   │   └── lumenstat/              the shared module
+│   │       ├── tunnel.tf           tunnel, routes, CNAMEs, tunnel token
+│   │       ├── zone.tf             DNSSEC, TLS, HSTS, no-mail records, rate limit
+│   │       ├── variables.tf
+│   │       ├── outputs.tf
+│   │       └── versions.tf         cloudflare/cloudflare >= 5.29, < 6.0
+│   └── environments/
+│       ├── production/             tunnel "lumenstat", manage_zone = true
+│       │   ├── main.tf
+│       │   ├── variables.tf
+│       │   ├── outputs.tf
+│       │   ├── versions.tf         OpenTofu >= 1.8, provider ~> 5.29, optional R2 backend
+│       │   ├── terraform.tfvars.example
+│       │   ├── imports.tf.example  for adopting a hand-made setup
+│       │   └── .terraform.lock.hcl
+│       └── staging/                tunnel "lumenstat-staging", zone untouched
+│           ├── main.tf
+│           ├── variables.tf
+│           ├── outputs.tf
+│           ├── versions.tf
+│           ├── terraform.tfvars.example
+│           └── .terraform.lock.hcl
+└── ansible/
+    ├── ansible.cfg
+    ├── requirements.yml            community.general >= 10, < 15
+    ├── site.yml                    base, docker, lumenstat on hosts in group "lumenstat"
+    ├── inventories/
+    │   ├── production/hosts.example.yml
+    │   └── staging/hosts.example.yml
+    └── roles/
+        ├── base/                   updates, firewall, SSH hardening
+        ├── docker/                 Docker Engine and Compose
+        └── lumenstat/              ship sources, run bootstrap.sh, start the tunnel
+```
+
+## Environments
+
+Both environments live in the same Cloudflare zone. Each has its own tunnel, its own hostnames and its own server.
+
+| | Production | Staging |
+| --- | --- | --- |
+| Tunnel | `lumenstat` | `lumenstat-staging` |
+| Dashboard | `app.example.com` | `app-staging.example.com` |
+| Tracker (Umami) | `t.example.com` | `t-staging.example.com` |
+| OTLP | `otlp.example.com` | `otlp-staging.example.com` |
+| Zone-wide settings | Managed here | Not touched |
+| Server | Its own host | Its own host |
+
+Staging names stay one label below the zone because the Free plan's Universal SSL certificate covers only first-level subdomains. `app.staging.example.com` would need Advanced Certificate Manager; with it, change the names in `environments/staging/main.tf`.
+
+Each host runs one stack in `/srv/lumenstat`, so staging needs its own server.
+
+<Note>
+  `deploy/compose.yaml` sets the dashboard's `PUBLIC_UMAMI_URL` and `PUBLIC_COLLECTOR_URL` to the production hostnames. On staging, setup snippets show those until this is made configurable.
+</Note>
+
+## Order of operations
+
+<Steps>
+  <Step title="OpenTofu">
+    Creates the tunnel, its routes and the DNS records, and in production the zone settings.
+  </Step>
+  <Step title="Token">
+    `tofu output -raw tunnel_token` goes into the Ansible secret `lumenstat_cloudflare_tunnel_token`, or by hand into `CLOUDFLARE_TUNNEL_TOKEN=` in `/srv/lumenstat/.env`.
+  </Step>
+  <Step title="Ansible">
+    Prepares the host, copies the sources to `/srv/lumenstat/src`, runs `deploy/bootstrap.sh`, writes the token and starts `cloudflared`.
+  </Step>
+</Steps>
+
+## OpenTofu
+
+You need OpenTofu 1.8 or newer and a Cloudflare API token in `CLOUDFLARE_API_TOKEN`, limited to your account and zone, with at least:
+
+- Account › Cloudflare Tunnel: Edit
+- Zone › DNS: Edit
+- Zone › Zone Settings: Edit
+- Zone › Zone WAF: Edit, for the rate limiting rule
+
+Staging needs only the tunnel and DNS permissions.
+
+```bash
+cd infra/opentofu/environments/staging        # or production
+cp terraform.tfvars.example terraform.tfvars   # account and zone IDs (git-ignored)
+tofu init
+tofu plan
+tofu apply
+tofu output -raw tunnel_token                  # for the next step; never paste it anywhere public
+```
+
+```hcl terraform.tfvars
+account_id = "<cloudflare account id>"
+zone_id    = "<zone id>"
+domain     = "example.com"
+dmarc_rua  = ""   # production only: optional address for DMARC reports
+```
+
+The provider is pinned to `cloudflare/cloudflare ~> 5.29` and locked in the committed `.terraform.lock.hcl`.
+
+### What it manages
+
+Per environment, in `tunnel.tf`:
+
+| Resource | What it is |
+| --- | --- |
+| `cloudflare_zero_trust_tunnel_cloudflared.this` | The tunnel, remotely managed (`config_src = "cloudflare"`). |
+| `cloudflare_zero_trust_tunnel_cloudflared_config.this` | The routes, evaluated in order: `app.` to `http://dashboard:3200`, `t.` with the path rule to `http://umami:3000`, `otlp.` with `^/v1/(traces\|metrics\|logs)$` to `http://collector:4318`, then `http_status:404`. |
+| `cloudflare_dns_record.tunnel` | Proxied CNAMEs for the three hostnames to `<tunnel id>.cfargotunnel.com`. |
+| `cloudflare_zero_trust_tunnel_cloudflared_token.this` (data) | The token `cloudflared` runs with, exposed as the sensitive output `tunnel_token`. |
+
+The `t.` route allows only `^/(script\.js|api/send|e|v/[0-9]+\.[0-9]+\.[0-9]+/l\.js)$`, which keeps Umami's own interface and API off the internet. The [overview](/self-hosting/overview#network-no-published-ports) explains why.
+
+Production only, when `manage_zone = true`, in `zone.tf`:
+
+| Resource | Setting |
+| --- | --- |
+| `cloudflare_zone_dnssec.this` | DNSSEC on. `tofu output dnssec_ds` is the DS record to publish at your registrar. |
+| `cloudflare_zone_setting.this` | SSL Full (strict), Always Use HTTPS, minimum TLS 1.2. |
+| `cloudflare_zone_setting.hsts` | HSTS for 6 months, including subdomains, no preload, with `nosniff`. |
+| `cloudflare_dns_record.mail` | No mail: SPF `v=spf1 -all`, DMARC `p=reject; sp=reject; adkim=s; aspf=s` (plus `rua` only if `dmarc_rua` is set), and a null MX. |
+| `cloudflare_ruleset.rate_limit` | The zone's one rate limiting rule: 5 requests per 10 seconds per IP to `/signup`, then a 10-second block. |
+
+<Note>
+  The Free plan allows only the path in a rate limiting rule's expression. Matching on host and method needs Pro or Business. So the rule applies to `/signup` on every hostname in the zone, which in practice means both dashboards. On a paid plan you can narrow it, as the comment in `zone.tf` shows.
+</Note>
+
+### Module inputs and outputs
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `account_id` | required | Cloudflare account that owns the tunnel. |
+| `zone_id` | required | Zone of `domain`. |
+| `domain` | required (environments default to `lumenstat.com`) | The zone apex. |
+| `tunnel_name` | required | Name of the tunnel for this environment. |
+| `hostnames` | required | Object with `app`, `t` and `otlp` hostnames. |
+| `manage_zone` | `false` | Also manage the zone-wide resources. Set it in exactly one environment. |
+| `dmarc_rua` | `""` | Address for DMARC aggregate reports, without `mailto:`. Empty means no `rua` tag. |
+| `signup_path` | `/signup` | The rate-limited path. |
+| `signup_requests_per_10s` | `5` | Requests per IP to `signup_path` in 10 seconds before a 10-second block. |
+
+Outputs: `tunnel_id`, `tunnel_token` (sensitive), `hostnames` and, in production, `dnssec_ds`.
+
+### State
+
+State is local by default and contains the tunnel token, so treat it as a secret. Keep it off shared drives and out of git; `.gitignore` covers it. To share it, create a private Cloudflare R2 bucket, export the R2 token's key pair as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, uncomment the `backend "s3"` block in `versions.tf` and run `tofu init -migrate-state`. OpenTofu's [state encryption](https://opentofu.org/docs/language/state/encryption/) can encrypt it as well.
+
+## Ansible
+
+You need:
+
+- ansible-core 2.19 or newer on your machine, which the current `community.general` expects;
+- Node on your machine, because the `lumenstat` role runs the tracker check there;
+- `vendor/umami` in place (`scripts/sync-umami.sh`), with its dependencies installed for the tracker check;
+- a server with Ubuntu 24.04 where you log in as a **sudo user with your SSH key**, not root. That user becomes the deploy user: it owns `/srv/lumenstat` and joins the `docker` group.
+
+```bash
+cd infra/ansible
+ansible-galaxy collection install -r requirements.yml
+cp inventories/staging/hosts.example.yml inventories/staging/hosts.yml   # your server (git-ignored)
+ansible-playbook -i inventories/staging/hosts.yml site.yml               # add -K if sudo asks for a password
+```
+
+For production, use `inventories/production/hosts.yml`.
+
+```yaml inventories/staging/hosts.yml
+all:
+  children:
+    lumenstat:
+      hosts:
+        lumenstat-staging:
+          ansible_host: staging.example.com
+          ansible_user: deploy   # sudoer with your SSH key; not root
+```
+
+`site.yml` runs three roles on the `lumenstat` group. `base` and `docker` run with `become`. `lumenstat` runs as the login user and asks for root only where it must.
+
+### Roles
+
+<AccordionGroup>
+  <Accordion title="base: updates, firewall, SSH">
+    - Installs `unattended-upgrades` and `ufw`, and turns on daily unattended upgrades.
+    - Firewall: allows SSH, denies other incoming connections by default, and enables `ufw`. Rules are added to what is there; nothing is reset. Docker-published ports bypass `ufw`, and the Lumenstat stack publishes none.
+    - SSH: writes `/etc/ssh/sshd_config.d/10-hardening.conf` with `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no` and `PubkeyAuthentication yes`. The file sorts before `50-cloud-init.conf`, so its values win.
+    - Safety checks: it stops with an error if Ansible is logged in as root, or if the login user has no valid key in `~/.ssh/authorized_keys`. The drop-in is validated with `sshd -t`, the whole configuration is checked again, and `sshd` is reloaded, not restarted, so open sessions stay. Still, keep a session open and test a fresh login after the first run.
+
+    | Variable | Default | Meaning |
+    | --- | --- | --- |
+    | `base_ssh_port` | `ansible_port`, else `22` | The port `ufw` keeps open for SSH. |
+    | `base_ssh_hardening` | `true` | Set `false` to leave SSH alone. |
+    | `base_fail2ban` | `false` | Set `true` for fail2ban with Ubuntu's default `sshd` jail. |
+  </Accordion>
+
+  <Accordion title="docker: Docker Engine and Compose">
+    Installs `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin` and `docker-compose-plugin` from Docker's apt repository, and starts Docker at boot. If Docker is already installed, for example for another project on the host, it is left as it is. The role stops with an error if that installation has no working `docker compose`.
+  </Accordion>
+
+  <Accordion title="lumenstat: deploy the stack">
+    Does what `deploy/deploy.sh` does:
+
+    1. checks that `vendor/umami` exists;
+    2. adds the login user to the `docker` group and reconnects;
+    3. creates `/srv/lumenstat` and `/srv/lumenstat/src` (mode 750, owned by the login user);
+    4. on your machine, runs `node scripts/build-tracker.mjs --check` and `scripts/stage-tracker-releases.sh`;
+    5. packs `apps`, `deploy`, `vendor/umami`, `patches`, `packages` (if present), `README.md` and `LICENSE`, without `node_modules`, `.next`, `.git`, `.env*` or build output, and unpacks them into `/srv/lumenstat/src`;
+    6. runs `deploy/bootstrap.sh`, which creates the env file on the first run, builds, starts the stack and replaces Umami's default admin password;
+    7. when `lumenstat_cloudflare_tunnel_token` is set, writes it to `/srv/lumenstat/.env` (mode 600, never logged) and recreates `cloudflared`.
+
+    | Variable | Default | Meaning |
+    | --- | --- | --- |
+    | `lumenstat_root` | `/srv/lumenstat` | Where the stack lives. |
+    | `lumenstat_repo_root` | two levels above the playbook | The repository checkout on your machine. |
+    | `lumenstat_sources` | the list above | What is shipped. Missing paths are skipped. |
+    | `lumenstat_source_excludes` | the list above | What is never shipped. |
+    | `lumenstat_cloudflare_tunnel_token` | `""` | The tunnel token. A secret: pass it encrypted, never in git. |
+  </Accordion>
+</AccordionGroup>
+
+The playbook touches only `/srv/lumenstat`, the `lumenstat` Compose project and the host defaults above. Other projects' containers, networks and firewall rules are left alone. No port is published, so the stack is reachable only through the tunnel.
+
+## Secrets
+
+Nothing secret goes into the repository: no API token, tunnel token, `.tfvars` file, real inventory or env file. `infra/.gitignore` covers state, `*.tfvars`, `imports.tf`, `hosts.yml`, inventory `group_vars` and `host_vars`, and anything decrypted from SOPS.
+
+Keep per-environment secrets in files encrypted with [SOPS](https://github.com/getsops/sops) and [age](https://github.com/FiloSottile/age), stored outside the public repository, for example in a private operations repository:
+
+```bash
+# OpenTofu: a dotenv file with CLOUDFLARE_API_TOKEN=..., TF_VAR_account_id=..., TF_VAR_zone_id=...
+sops exec-env <secrets>/cloudflare-production.sops.env 'tofu plan'
+
+# Ansible: a YAML file with lumenstat_cloudflare_tunnel_token: ...
+sops exec-file --no-fifo <secrets>/ansible-production.sops.yml \
+  'ansible-playbook -i inventories/production/hosts.yml site.yml -e @{}'
+```
+
+The server keeps its own secrets in `/srv/lumenstat/.env`, created by `bootstrap.sh` on the first run. See [Configuration](/self-hosting/configuration#the-env-file).
+
+## Adopt an existing zone and tunnel
+
+If the zone, tunnel and records were created by hand, import them before the first `apply`. Otherwise OpenTofu tries to create a second tunnel, duplicate DNS records and a second rate limiting ruleset, and fails half-way.
+
+<Steps>
+  <Step title="Find the IDs">
+    With an API token in `CLOUDFLARE_API_TOKEN`, and your account and zone IDs in `ACCOUNT_ID` and `ZONE_ID`:
+
+    ```bash
+    # Tunnel ID (also on Networking > Tunnels)
+    curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+      "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/cfd_tunnel?name=lumenstat&is_deleted=false" | jq -r '.result[].id'
+
+    # DNS record IDs
+    curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+      "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?per_page=100" | jq -r '.result[] | [.id, .type, .name] | @tsv'
+
+    # Rate limiting ruleset ID
+    curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+      "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/rulesets/phases/http_ratelimit/entrypoint" | jq -r '.result.id'
+    ```
+  </Step>
+
+  <Step title="Write the import blocks">
+    In `environments/production`, copy the example and replace each `<…>` placeholder:
+
+    ```bash
+    cp imports.tf.example imports.tf   # imports.tf is git-ignored
+    ```
+
+    | Resource address | Import ID |
+    | --- | --- |
+    | `module.lumenstat.cloudflare_zero_trust_tunnel_cloudflared.this` | `<account id>/<tunnel id>` |
+    | `module.lumenstat.cloudflare_zero_trust_tunnel_cloudflared_config.this` | `<account id>/<tunnel id>` |
+    | `module.lumenstat.cloudflare_dns_record.tunnel["app"]`, `["t"]`, `["otlp"]` | `<zone id>/<record id>` |
+    | `module.lumenstat.cloudflare_dns_record.mail["spf"]`, `["dmarc"]`, `["mx"]` | `<zone id>/<record id>` |
+    | `module.lumenstat.cloudflare_ruleset.rate_limit[0]` | `zones/<zone id>/<ruleset id>` |
+    | `module.lumenstat.cloudflare_zone_dnssec.this[0]` | `<zone id>` |
+    | `module.lumenstat.cloudflare_zone_setting.this["ssl"]`, `["always_use_https"]`, `["min_tls_version"]` | `<zone id>/<setting>` |
+    | `module.lumenstat.cloudflare_zone_setting.hsts[0]` | `<zone id>/security_header` |
+
+    The account and zone IDs come from `var.account_id` and `var.zone_id`, so you fill in only the tunnel, record and ruleset IDs. Drop the block for anything that does not exist yet; `apply` creates it.
+  </Step>
+
+  <Step title="Plan">
+    ```bash
+    tofu plan
+    ```
+
+    The plan must show the imports and at most small in-place updates, for example HSTS if it was not set before. If it wants to replace or create the tunnel or a record, fix that ID first.
+  </Step>
+
+  <Step title="Apply and clean up">
+    ```bash
+    tofu apply
+    rm imports.tf
+    ```
+  </Step>
+</Steps>
+
+The imported tunnel keeps its token, so the server's `/srv/lumenstat/.env` stays valid. Staging is new and has nothing to import.
+
+## Limits
+
+- The code covers Cloudflare and one host per environment. It sets up no backups, monitoring or alerts.
+- The routes send `t.` and `otlp.` through Cloudflare, which sees visitor IPs in transit. See the [privacy note](/self-hosting/overview#privacy-serve-t-and-otlp-dns-only).
+
+<Note>
+  **Planned:** off-site backups in the EU, alerts, and serving `t.` and `otlp.` directly from EU servers are part of Milestone 3. See the [roadmap](/project/roadmap).
+</Note>

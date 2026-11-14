@@ -1,0 +1,72 @@
+---
+# Docker Engine and the compose plugin from Docker's apt repository.
+# On a shared host an existing Docker installation is left as it is.
+
+- name: Look for an existing Docker installation
+  ansible.builtin.stat:
+    path: /usr/bin/docker
+  register: docker_binary
+
+- name: Check for the compose plugin
+  ansible.builtin.command: docker compose version
+  register: docker_compose_version
+  changed_when: false
+  failed_when: false
+  when: docker_binary.stat.exists
+
+- name: Stop if Docker is installed without the compose plugin
+  ansible.builtin.fail:
+    msg: >-
+      Docker is already installed on this host but `docker compose` does not work.
+      This role does not replace an existing Docker installation; add the compose
+      plugin for it (docker-compose-plugin or docker-compose-v2) and run again.
+  when: docker_binary.stat.exists and docker_compose_version.rc != 0
+
+- name: Install Docker from Docker's apt repository
+  when: not docker_binary.stat.exists
+  block:
+    - name: Create the apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Add Docker's apt signing key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Add Docker's apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.sources
+        content: |
+          Types: deb
+          URIs: https://download.docker.com/linux/ubuntu
+          Suites: {{ ansible_facts.distribution_release }}
+          Components: stable
+          Signed-By: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install Docker Engine and the compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+- name: Start Docker now and at boot
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true

@@ -1,0 +1,68 @@
+---
+title: "Quickstart"
+description: "Enroll a project, add the tracker and confirm your first page view, in about 15 minutes."
+icon: "rocket"
+---
+
+Enrolling creates your account, your project and one website per domain, then gives you a snippet pinned to an exact tracker release. Serve your site over HTTPS; it is what Lumenstat is tested against.
+
+<Steps>
+  <Step title="Enroll your project">
+    Open [app.lumenstat.com/signup](https://app.lumenstat.com/signup) and fill in:
+
+    - **Project name** and **your email**.
+    - **Domains** you want to measure, one per line, for example `example.org` and `docs.example.org`. A leading `www.` is removed, so `www.example.org` and `example.org` are the same entry.
+    - **One Stellar link** that ties the project to the ecosystem: your SCF project page on communityfund.stellar.org, a page on stellar.expert, stellarchain.io or lumenscan.io, a `G…` account address (checked on Horizon mainnet) or a `C…` contract address.
+
+    Depending on how the service is configured, your project is approved at once or waits for an SCF operator. Either way you land on the **Setup** page.
+  </Step>
+
+  <Step title="Paste the snippet">
+    Copy the snippet from **Setup** into the `<head>` of every page. It looks like this, with your own website id:
+
+    ```html
+    <script
+      defer
+      src="https://t.lumenstat.com/v/1.0.0/l.js"
+      integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+      crossorigin="anonymous"
+      data-website-id="YOUR-WEBSITE-ID"
+    ></script>
+    ```
+
+    Using a framework? See [Framework recipes](/web/frameworks) for Next.js, Vite, Astro, SvelteKit and Nuxt.
+  </Step>
+
+  <Step title="Confirm data is arriving">
+    Visit your site in a normal browser, then open **Setup** again. **Is data arriving?** turns green with the page views from the last 24 hours. Your numbers are under **Overview** and **Website**.
+
+    <Tip>
+      Nothing showing? Check that the page is served over HTTPS, that the domain you visited is one you enrolled, and that the browser console shows no integrity error.
+    </Tip>
+  </Step>
+
+  <Step title="Add your API (optional)">
+    On **Setup**, issue an ingest key and add a second OpenTelemetry exporter to your service. Your existing APM keeps full traces; Lumenstat keeps request counts, status codes and latency per route. Follow [API analytics](/api/overview).
+  </Step>
+</Steps>
+
+## See the bot defense work
+
+You can try to inflate your own numbers and watch Lumenstat refuse. From a clone of the [repository](https://github.com/boundlessfi/lumenstat), send scripted page views with forged browser headers:
+
+```bash
+node scripts/fake-event.mjs --site YOUR-WEBSITE-ID --domain YOUR-DOMAIN --level forged --count 20
+```
+
+Your page views do not move. The 20 events appear on the **Website** page under **Flagged, not counted**, with the reason `no_proof`. [Bot and inflation defense](/trust/bot-defense) explains each layer and how to test the others.
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Custom events" icon="mouse-pointer-click" href="/web/custom-events">
+    Count sign-ups, wallet connections and other actions.
+  </Card>
+  <Card title="Verify the tracker" icon="fingerprint" href="/web/verify-the-tracker">
+    Check the integrity hash yourself before you ship it.
+  </Card>
+</Columns>

@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars (git-ignored). Same account and zone as production.
+account_id = "<cloudflare account id>"
+zone_id    = "<zone id>"
+domain     = "lumenstat.com"

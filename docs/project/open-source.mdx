@@ -1,0 +1,52 @@
+---
+title: "Open source"
+description: "The license, how the repository is laid out, and how to contribute."
+icon: "git-branch"
+---
+
+Everything that makes up Lumenstat is MIT licensed: the service code, the Umami patches, the tracker, the infrastructure code and these docs. Umami itself is MIT. A community operator can run the whole service from the repository without asking anyone for permission.
+
+## Repository layout
+
+<Tree>
+  <Tree.Folder name="lumenstat" defaultOpen>
+    <Tree.Folder name="apps">
+      <Tree.Folder name="collector" />
+      <Tree.Folder name="dashboard" />
+      <Tree.Folder name="writer" />
+    </Tree.Folder>
+    <Tree.Folder name="packages">
+      <Tree.Folder name="tracker" />
+    </Tree.Folder>
+    <Tree.Folder name="patches">
+      <Tree.Folder name="umami" />
+    </Tree.Folder>
+    <Tree.Folder name="deploy" />
+    <Tree.Folder name="infra" />
+    <Tree.Folder name="docs" />
+    <Tree.Folder name="scripts" />
+    <Tree.Folder name="examples" />
+  </Tree.Folder>
+</Tree>
+
+| Path | What it holds |
+| --- | --- |
+| `apps/collector` | OpenTelemetry Collector configuration: tenant stamping, spanmetrics, dropping traces and logs |
+| `apps/writer` | Stores API metrics, normalizes routes, serves the metrics API |
+| `apps/dashboard` | The Next.js dashboard for projects and SCF operators |
+| `packages/tracker` | Released tracker files, their integrity hashes, and the npm package |
+| `patches/umami` | The changes to Umami v3.5.0, one commit per concern, applied by `scripts/sync-umami.sh` |
+| `deploy` | Docker Compose and scripts for a single-server deploy |
+| `infra` | OpenTofu for Cloudflare and Ansible for the host, for staging and production |
+| `docs` | This site |
+
+## Why a patch set instead of a fork
+
+Umami is kept as an upstream release plus a short series of patches. Each patch does one thing, has its own switch, and leaves Umami behaving like upstream when the switch is off. That keeps every privacy and anti-inflation change reviewable on its own, and makes an Umami upgrade a matter of rebasing a few small commits instead of merging two diverged codebases.
+
+## Contributing
+
+- **Bugs and requests:** open an issue on [GitHub](https://github.com/boundlessfi/lumenstat/issues), or post on the [feedback board](/project/feedback) if you are not on GitHub.
+- **Security problems:** never in a public issue. Follow the [security policy](/trust/security-policy).
+- **Pull requests:** keep them small, run the tests for what you touched (`npm test` in `apps/writer`, `pnpm vitest run src/lib/scf` in `vendor/umami`, `npm run build` in `apps/dashboard`), and explain the reason for the change, not only what changed.
+- **Docs:** pages live in `docs/`. Preview with `npx mint dev` from that folder, and read `docs/AGENTS.md` for the writing rules.

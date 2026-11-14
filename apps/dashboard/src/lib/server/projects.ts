@@ -1,5 +1,6 @@
 import 'server-only';
 import type { Window } from '@/lib/range';
+import { asAdmin } from './admin';
 import { type MetricType, type Point, type UmamiWebsite, type WebStats, umami } from './umami';
 import { type ApiRoute, type ApiTenant, writer } from './writer';
 
@@ -87,4 +88,28 @@ export function bounceRate(stats: WebStats): number | null {
 
 export function avgVisitSeconds(stats: WebStats): number | null {
   return stats.visits > 0 ? stats.totaltime / stats.visits : null;
+}
+
+/**
+ * Flagged traffic for a project's own websites: events that failed the bot and
+ * inflation checks and were not counted. Read with the admin token and filtered
+ * here to the project's websites, so a project sees only its own.
+ */
+export async function loadFlagged(
+  websites: UmamiWebsite[],
+  w: Window,
+): Promise<{ events: number; reasons: Record<string, number> } | null> {
+  try {
+    const ids = new Set(websites.map(site => site.id));
+    const { websites: rows } = await asAdmin(token => umami.flagged(token, w));
+    const reasons: Record<string, number> = {};
+    let events = 0;
+    for (const row of rows.filter(r => ids.has(r.websiteId))) {
+      events += row.events;
+      for (const [reason, n] of Object.entries(row.reasons)) reasons[reason] = (reasons[reason] ?? 0) + n;
+    }
+    return { events, reasons };
+  } catch {
+    return null;
+  }
 }

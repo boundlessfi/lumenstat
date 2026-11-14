@@ -12,7 +12,8 @@ UMAMI_REPO="${UMAMI_REPO:-https://github.com/umami-software/umami.git}"
 
 rm -rf vendor/umami
 git clone --quiet --depth 1 --branch "$UMAMI_TAG" "$UMAMI_REPO" vendor/umami
-git -C vendor/umami am --quiet patches/umami/*.patch
+git -C vendor/umami am --quiet "$PWD"/patches/umami/*.patch   # absolute: -C changes the directory git resolves paths from
+scripts/stage-tracker-releases.sh
 
 echo "vendor/umami = $UMAMI_TAG + $(ls patches/umami/*.patch | wc -l | tr -d ' ') patches"
 git -C vendor/umami log --oneline -n "$(ls patches/umami/*.patch | wc -l)"

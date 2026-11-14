@@ -5,7 +5,7 @@ import { createPool, migrate } from './db.ts';
 import { mergeRows, RouteGuard, toRows } from './ingest.ts';
 import { safeEqual } from './keys.ts';
 import { extractHistogramPoints } from './otlp.ts';
-import { type ReadScope, Store } from './store.ts';
+import { type EnrollmentStatus, type ReadScope, Store } from './store.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const DATABASE_URL = process.env.DATABASE_URL ?? '';
@@ -79,6 +79,118 @@ async function authenticate(req: http.IncomingMessage): Promise<ReadScope> {
   return scope;
 }
 
+async function requireOperator(req: http.IncomingMessage): Promise<void> {
+  const scope = await authenticate(req);
+  if (scope.scope !== 'operator') throw new HttpError(403, 'operator key required');
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+async function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const body = await readBody(req);
+  if (body.length > 64 * 1024) throw new HttpError(413, 'body too large');
+  try {
+    const value: unknown = JSON.parse(body.toString('utf8') || '{}');
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  } catch {
+    // fall through
+  }
+  throw new HttpError(400, 'body must be a JSON object');
+}
+
+function text(value: unknown, field: string, max: number, required = true): string | null {
+  if (value === undefined || value === null || value === '') {
+    if (required) throw new HttpError(400, `${field} is required`);
+    return null;
+  }
+  if (typeof value !== 'string' || value.trim().length > max) throw new HttpError(400, `${field} is invalid`);
+  return value.trim();
+}
+
+function uuid(value: unknown, field: string, required = true): string | null {
+  const v = text(value, field, 36, required);
+  if (v !== null && !UUID_RE.test(v)) throw new HttpError(400, `${field} must be a UUID`);
+  return v;
+}
+
+/** Operator-only control API used by the dashboard for enrollment and keys. */
+async function admin(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const path = url.pathname;
+  if (!path.startsWith('/v1/admin/')) return false;
+  await requireOperator(req);
+
+  if (req.method === 'POST' && path === '/v1/admin/tenants') {
+    const body = await readJson(req);
+    const name = text(body.name, 'name', 80) ?? '';
+    const teamId = uuid(body.umamiTeamId, 'umamiTeamId', false);
+    const { tenantId, ingestKey } = await store.createTenant(name);
+    if (teamId) await store.linkUmamiTeam(tenantId, teamId);
+    log('info', 'tenant created', { tenantId, umamiTeamId: teamId });
+    send(res, 201, { tenantId, ingestKey });
+    return true;
+  }
+
+  const keyMatch = /^\/v1\/admin\/tenants\/([0-9a-f-]{36})\/ingest-keys$/.exec(path);
+  if (req.method === 'POST' && keyMatch) {
+    const tenantId = keyMatch[1] ?? '';
+    const body = await readJson(req);
+    if (!(await store.tenantExists(tenantId))) throw new HttpError(404, 'tenant not found');
+    const ingestKey = await store.createIngestKey(tenantId, text(body.label, 'label', 60, false) ?? 'dashboard');
+    log('info', 'ingest key issued', { tenantId });
+    send(res, 201, { ingestKey });
+    return true;
+  }
+
+  if (req.method === 'POST' && path === '/v1/admin/enrollments') {
+    const body = await readJson(req);
+    const domains = Array.isArray(body.domains) ? body.domains : [];
+    if (domains.length < 1 || domains.length > 10 || !domains.every(d => typeof d === 'string' && d.length <= 253)) {
+      throw new HttpError(400, 'domains must list 1 to 10 hostnames');
+    }
+    const enrollment = await store.createEnrollment({
+      projectName: text(body.projectName, 'projectName', 80) ?? '',
+      domains: domains as string[],
+      stellarLink: text(body.stellarLink, 'stellarLink', 300) ?? '',
+      contact: text(body.contact, 'contact', 254) ?? '',
+      umamiUserId: uuid(body.umamiUserId, 'umamiUserId') ?? '',
+      umamiTeamId: uuid(body.umamiTeamId, 'umamiTeamId') ?? '',
+    });
+    log('info', 'enrollment received', { enrollmentId: enrollment.enrollmentId });
+    send(res, 201, { enrollment });
+    return true;
+  }
+
+  if (req.method === 'GET' && path === '/v1/admin/enrollments') {
+    const status = url.searchParams.get('status');
+    if (status && !['pending', 'approved', 'rejected'].includes(status)) throw new HttpError(400, 'invalid status');
+    const teamId = uuid(url.searchParams.get('teamId'), 'teamId', false);
+    const enrollments = await store.listEnrollments({
+      status: (status as EnrollmentStatus | null) ?? undefined,
+      teamId: teamId ?? undefined,
+    });
+    send(res, 200, { enrollments });
+    return true;
+  }
+
+  const decisionMatch = /^\/v1\/admin\/enrollments\/([0-9a-f-]{36})\/decision$/.exec(path);
+  if (req.method === 'POST' && decisionMatch) {
+    const body = await readJson(req);
+    if (body.status !== 'approved' && body.status !== 'rejected') throw new HttpError(400, 'status must be approved or rejected');
+    const enrollment = await store.decideEnrollment(decisionMatch[1] ?? '', {
+      status: body.status,
+      decidedBy: text(body.decidedBy, 'decidedBy', 254) ?? '',
+      tenantId: uuid(body.tenantId, 'tenantId', false),
+      note: text(body.note, 'note', 500, false),
+    });
+    if (!enrollment) throw new HttpError(409, 'enrollment not found or already decided');
+    log('info', 'enrollment decided', { enrollmentId: enrollment.enrollmentId, status: enrollment.status });
+    send(res, 200, { enrollment });
+    return true;
+  }
+
+  throw new HttpError(404, 'not found');
+}
+
 /** POST /v1/metrics: OTLP/JSON from our own collector, never from the public internet. */
 async function ingestMetrics(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const secret = String(req.headers['x-scf-collector-secret'] ?? '');
@@ -116,6 +228,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   const path = url.pathname;
 
   if (req.method === 'POST' && path === '/v1/metrics') return ingestMetrics(req, res);
+  if (await admin(req, res, url)) return;
 
   if (req.method === 'GET' && path === '/healthz') {
     await pool.query('select 1');
@@ -153,7 +266,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
 const server = http.createServer((req, res) => {
   route(req, res).catch((error: unknown) => {
     if (error instanceof HttpError) {
-      if (error.status >= 500 || error.status === 401) log('warn', error.message, { status: error.status, path: req.url });
+      if (error.status >= 500 || error.status === 401 || error.status === 403) log('warn', error.message, { status: error.status, path: req.url });
       send(res, error.status, { error: error.message });
       return;
     }

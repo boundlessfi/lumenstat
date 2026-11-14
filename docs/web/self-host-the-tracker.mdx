@@ -1,0 +1,116 @@
+---
+title: "Self-host the tracker"
+description: "Serve the tracker file from your own domain with the @lumenstat/tracker npm package, and what changes when you do."
+icon: "package"
+---
+
+You can serve the tracker file from your own domain instead of `t.lumenstat.com`. The file is byte for byte the hosted release, with the same integrity hash, and it still sends events to Lumenstat's collect endpoint. Only the origin of the script changes.
+
+<Note>
+  The first npm publish of `@lumenstat/tracker` is pending (Milestone 1). Until it ships, `npm install` will not find the package. You can take the same file from [`packages/tracker/releases/1.0.0.js`](https://github.com/boundlessfi/lumenstat/blob/main/packages/tracker/releases/1.0.0.js) in the repository and check it as described in [Verify the tracker](/web/verify-the-tracker).
+</Note>
+
+## Hosted or self-hosted
+
+| | Hosted at `t.lumenstat.com` | Served from your domain |
+| --- | --- | --- |
+| The file | Release 1.0.0, 10,447 bytes | The same bytes and the same `integrity` hash |
+| Where events go | `https://t.lumenstat.com/e` | `https://t.lumenstat.com/e`, unchanged |
+| Content Security Policy | `script-src` and `connect-src` must allow `https://t.lumenstat.com` | `script-src 'self'` covers the file. `connect-src` still needs `https://t.lumenstat.com` |
+| Caching | One-year immutable cache, set by Lumenstat | Whatever your host sends |
+| Upgrading | Change `src` and `integrity` in the tag | Install the new version, copy the new file, change `integrity` |
+
+Self-hosting is worth it when your policy allows scripts only from your own origin, or requires every script to come from your own build. Otherwise the hosted file does the same job with less to maintain.
+
+<Steps>
+  <Step title="Install the package">
+    ```bash
+    npm install --save-exact @lumenstat/tracker@1.0.0
+    ```
+
+    Pin the exact version. A new version is a different file with a different hash, so it should only arrive when you choose it.
+  </Step>
+
+  <Step title="Check the file">
+    The package ships the file as `dist/l.js` and the release record as `releases.json`. The hash of the first must equal the `integrity` value in the second.
+
+    ```bash
+    openssl dgst -sha384 -binary node_modules/@lumenstat/tracker/dist/l.js | openssl base64 -A
+    node -p "require('@lumenstat/tracker/releases.json')['1.0.0'].integrity"
+    npm audit signatures
+    ```
+
+    The first command prints the hash without the `sha384-` prefix. `npm audit signatures` checks the registry signatures and provenance attestations of your installed packages.
+  </Step>
+
+  <Step title="Copy it into your static files">
+    Copy the file as part of your build, under a name that includes the version:
+
+    ```bash
+    cp node_modules/@lumenstat/tracker/dist/l.js public/lumenstat-1.0.0.js
+    ```
+
+    Serve it as is. Do not import the package into your JavaScript bundle: a bundler rewrites the bytes, so they no longer match the hash, and the tracker reads its settings from its own `<script>` tag. Because the name changes with every version, you can serve the file with a long, immutable cache.
+  </Step>
+
+  <Step title="Point the tag at your copy">
+    Take the website id from **Setup** and write the tag yourself:
+
+    ```html
+    <script
+      defer
+      src="/lumenstat-1.0.0.js"
+      integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+      data-website-id="YOUR-WEBSITE-ID"
+      data-domains="example.org,www.example.org"
+    ></script>
+    ```
+
+    Keep `integrity`: it still protects visitors if the file on your host or CDN is changed. A file served from the page's own origin needs no `crossorigin`. If you serve it from another origin, such as a separate static-asset host, add `crossorigin="anonymous"` and make that host send `Access-Control-Allow-Origin`.
+
+    Leave `data-host-url` out. The file already sends to `https://t.lumenstat.com/e`.
+  </Step>
+
+  <Step title="Confirm data is arriving">
+    Deploy, open a page of your site, then reload **Setup** and check **Is data arriving?**. The troubleshooting list in [Add the tracker](/web/add-the-tracker#troubleshooting) applies unchanged.
+  </Step>
+</Steps>
+
+## Where events go: data-host-url
+
+The collect host and the endpoint path are built into each release file. Releases from the Lumenstat repository send to `https://t.lumenstat.com/e`. `data-host-url` replaces the host and keeps the path:
+
+```html
+<!-- Events go to https://t.example.org/e -->
+<script
+  defer
+  src="/lumenstat-1.0.0.js"
+  integrity="sha384-cBzCCJcHCWSGbuy/f+zavGm/HjUWv77eni4DyLfq+FfKigpin1mul1ekLXILze/3"
+  data-website-id="YOUR-WEBSITE-ID"
+  data-host-url="https://t.example.org"
+></script>
+```
+
+Set it only when you run your own Lumenstat instance, as described in [Self-hosting](/self-hosting/overview). That server must serve the collect endpoint at `/e`. On such an instance, **Setup** adds `data-host-url` to the snippet by itself whenever its public tracker host is not `https://t.lumenstat.com`.
+
+<Warning>
+  Do not point `data-host-url` at a proxy on your own server that forwards to `t.lumenstat.com`. Every event would then arrive from your server's IP address: the data-center check and the per-network limit flag the traffic, and every visitor gets your server's country.
+</Warning>
+
+## Provenance
+
+The package is published by the [release workflow](https://github.com/boundlessfi/lumenstat/blob/main/.github/workflows/release-tracker.yml) when a tag `tracker-v<version>` is pushed that matches the version in `packages/tracker/package.json`. Before anything is published, the workflow:
+
+1. Rebuilds the tracker from Umami v3.5.0 and the patches in `patches/umami`, and stops unless the result matches `packages/tracker/releases/<version>.js` byte for byte.
+2. Creates a GitHub release with the file attached and its URL and hash in the notes.
+3. Runs `npm publish --provenance --access public`.
+
+With provenance, npm stores a signed statement that links the published package to the repository, the commit and the workflow run that built it. The package page on npmjs.com shows it, and `npm audit signatures` verifies it. Provenance tells you where the package came from. It does not tell you that the commit is safe, so review the changes before you upgrade.
+
+## Limits
+
+- **Your build carries the hash.** The `integrity` value lives in the HTML your build produces. It protects against a changed file on a static host or CDN, not against a compromised build that can change both the file and the hash.
+- **Upgrades are yours to notice.** Watch [`releases.json`](https://github.com/boundlessfi/lumenstat/blob/main/packages/tracker/releases.json) or the repository's releases. Tracker upgrade notices in the dashboard are planned.
+- **The collect request does not change.** Each event still goes from the visitor's browser to `t.lumenstat.com`. In the current pilot that hostname passes through Cloudflare, which sees visitor IP addresses in transit. Self-hosting the file changes who serves the script, not who receives the events.
+
+{/* TODO: add the milestone for tracker upgrade notices. The Settings page calls them "planned for the next milestones"; project/roadmap.mdx does not list them. */}

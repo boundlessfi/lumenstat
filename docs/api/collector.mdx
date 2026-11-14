@@ -1,0 +1,259 @@
+---
+title: "Collector and other languages"
+description: "Send API metrics from Go, Python, Rust, Java or any OpenTelemetry SDK, through your own Collector or with SDK environment variables."
+icon: "git-fork"
+---
+
+Lumenstat accepts standard OTLP over HTTP, so any OpenTelemetry SDK can send to it. If you already run an OpenTelemetry Collector, add a second exporter there and every service behind it is covered without code changes. If you have no APM and no Collector, point the SDK at Lumenstat with environment variables.
+
+| You have | Use |
+| --- | --- |
+| An OpenTelemetry Collector, with or without an APM behind it | [Add Lumenstat to your Collector](#add-lumenstat-to-your-collector) |
+| An APM that receives traces straight from the SDK | Run a Collector in between, or for Node.js, [add a second exporter in code](/api/node) |
+| No APM and no Collector | [Use SDK environment variables](#use-sdk-environment-variables) |
+
+## Add Lumenstat to your Collector
+
+<Steps>
+  <Step title="Issue an ingest key">
+    Issue a key on your project's **Setup** page, as described in [Issue an ingest key](/api/overview#issue-an-ingest-key). Give it to the Collector process as `LUMENSTAT_INGEST_KEY`.
+  </Step>
+  <Step title="Add the exporter">
+    Add an `otlphttp` exporter with the ingest key header:
+
+    ```yaml
+    exporters:
+      otlphttp/lumenstat:
+        endpoint: https://otlp.lumenstat.com
+        headers:
+          x-scf-ingest-key: ${env:LUMENSTAT_INGEST_KEY}
+    ```
+  </Step>
+  <Step title="Add it to the traces pipeline">
+    List it next to your existing exporter in the `traces` pipeline. Do not add it to your metrics or logs pipelines: Lumenstat drops logs and keeps only three HTTP latency metric series.
+  </Step>
+  <Step title="Restart and confirm">
+    Restart the Collector, send a few requests to a service behind it, then check **Is data arriving?** on Setup. See [Confirm data is arriving](#confirm-data-is-arriving).
+  </Step>
+</Steps>
+
+A complete configuration with an existing APM exporter and Lumenstat side by side:
+
+```yaml otel-collector.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  # Your existing APM exporter. Leave it as it is.
+  otlphttp/apm:
+    endpoint: https://otlp.apm.example.com
+    headers:
+      api-key: ${env:APM_API_KEY}
+
+  # Second exporter: Lumenstat.
+  otlphttp/lumenstat:
+    endpoint: https://otlp.lumenstat.com
+    headers:
+      x-scf-ingest-key: ${env:LUMENSTAT_INGEST_KEY}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/apm, otlphttp/lumenstat]
+```
+
+This file passes `otelcol-contrib validate` on Collector 0.164.0, the version Lumenstat runs.
+
+- **`endpoint` is the base URL.** The `otlphttp` exporter appends `/v1/traces` itself. Writing `endpoint: https://otlp.lumenstat.com/v1/traces` sends to `/v1/traces/v1/traces`, which returns 404. To give the full URL, use `traces_endpoint: https://otlp.lumenstat.com/v1/traces` instead.
+- **Use `otlphttp`, not `otlp`.** The `otlp` exporter speaks gRPC, and Lumenstat has no public gRPC endpoint.
+- **Defaults are fine.** `otlphttp` sends protobuf with gzip by default. Lumenstat accepts both.
+- **Processors in a shared pipeline apply to Lumenstat too.** A sampler such as `probabilistic_sampler` or `tail_sampling` lowers Lumenstat's request counts by the same ratio. A processor that deletes `http.route` or `url.path` makes routes worse. If your pipeline has either, use a separate pipeline as below.
+
+### Send only what Lumenstat reads
+
+A second traces pipeline on the same receiver gets its own copy of every span. Give Lumenstat a pipeline without your sampler, and trim each span to the attributes Lumenstat reads before it leaves your network.
+
+```yaml otel-collector.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+  # Your existing sampler. It stays on the APM pipeline.
+  probabilistic_sampler:
+    sampling_percentage: 10
+
+  # Lumenstat counts server spans only: drop every other span kind.
+  filter/lumenstat:
+    error_mode: ignore
+    traces:
+      span:
+        - 'kind != SPAN_KIND_SERVER'
+
+  # Keep only the attributes Lumenstat reads.
+  transform/lumenstat:
+    error_mode: ignore
+    trace_statements:
+      - context: resource
+        statements:
+          - keep_keys(attributes, ["service.name"])
+      - context: span
+        statements:
+          - keep_keys(attributes, ["http.route", "url.path", "http.target", "http.request.method", "http.method", "http.response.status_code", "http.status_code"])
+
+exporters:
+  otlphttp/apm:
+    endpoint: https://otlp.apm.example.com
+    headers:
+      api-key: ${env:APM_API_KEY}
+
+  otlphttp/lumenstat:
+    endpoint: https://otlp.lumenstat.com
+    headers:
+      x-scf-ingest-key: ${env:LUMENSTAT_INGEST_KEY}
+
+service:
+  pipelines:
+    # Sampled traces for your APM, as before.
+    traces:
+      receivers: [otlp]
+      processors: [probabilistic_sampler, batch]
+      exporters: [otlphttp/apm]
+    # Every server span, trimmed, for Lumenstat.
+    traces/lumenstat:
+      receivers: [otlp]
+      processors: [filter/lumenstat, transform/lumenstat, batch]
+      exporters: [otlphttp/lumenstat]
+```
+
+This file also passes `otelcol-contrib validate` on 0.164.0.
+
+- `filter` and `transform` ship in the contrib distribution (`otelcol-contrib`), not in the core Collector.
+- The attribute list is the one Lumenstat's collector uses as spanmetrics dimensions. Span kind and status are span fields, not attributes, so `keep_keys` leaves them alone.
+- If every service sets `http.route`, remove `url.path` and `http.target` from the list so raw paths never leave your network. A server span with neither a route nor a path is then counted under `{unknown}`.
+- Span events, which carry exception messages and stack traces, are not trimmed by this configuration. Lumenstat does not read or store them.
+
+## Use SDK environment variables
+
+For a service with no APM and no Collector, configure the SDK's OTLP trace exporter with the standard variables:
+
+```bash
+OTEL_SERVICE_NAME=my-api
+OTEL_TRACES_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://otlp.lumenstat.com/v1/traces
+OTEL_EXPORTER_OTLP_TRACES_HEADERS=x-scf-ingest-key=scf_ingest_...
+OTEL_METRICS_EXPORTER=none
+OTEL_LOGS_EXPORTER=none
+```
+
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is used as written, so it includes `/v1/traces`. The general `OTEL_EXPORTER_OTLP_ENDPOINT` is different: the SDK appends the signal path to it.
+- `OTEL_EXPORTER_OTLP_TRACES_HEADERS` takes comma-separated `key=value` pairs. Ingest keys use only URL-safe characters, so the key needs no escaping.
+- `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf` matters because Lumenstat accepts only OTLP over HTTP, and some SDKs default to gRPC.
+- `OTEL_METRICS_EXPORTER=none` and `OTEL_LOGS_EXPORTER=none` stop the SDK from exporting its own metrics and logs to its default endpoint without a key. Lumenstat builds request metrics from spans.
+
+The **Copy settings** button on Setup copies the endpoint and headers lines with your key filled in.
+
+<Warning>
+  These variables configure the SDK's one OTLP trace exporter. Pointing it at Lumenstat takes it away from wherever it sent traces before. To keep sending full traces to an APM as well, export to a Collector and fan out there, as in [Add Lumenstat to your Collector](#add-lumenstat-to-your-collector). In Node.js you can also [add a second exporter in code](/api/node).
+</Warning>
+
+Notes per language:
+
+<Tabs>
+  <Tab title="Java">
+    The OpenTelemetry Java agent reads every variable above.
+
+    ```bash
+    java -javaagent:opentelemetry-javaagent.jar -jar app.jar
+    ```
+
+    The agent's framework instrumentations, such as Spring Web MVC, set `http.route` on server spans.
+  </Tab>
+  <Tab title="Python">
+    Install the distro and the OTLP/HTTP exporter, then run the app through `opentelemetry-instrument`:
+
+    ```bash
+    pip install opentelemetry-distro opentelemetry-exporter-otlp-proto-http
+    opentelemetry-bootstrap -a install
+    opentelemetry-instrument python app.py
+    ```
+
+    The Python distro defaults the OTLP protocol to gRPC, so keep `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf`. The Django, Flask and FastAPI instrumentations set `http.route`.
+  </Tab>
+  <Tab title="Go">
+    Build the exporter with `otlptracehttp`, which reads the endpoint and headers variables. The protocol variable does not apply because the package is HTTP only.
+
+    ```go
+    import (
+    	"go.opentelemetry.io/otel"
+    	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+    	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+    )
+
+    exporter, err := otlptracehttp.New(ctx)
+    if err != nil {
+    	return err
+    }
+    tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
+    defer tp.Shutdown(ctx)
+    otel.SetTracerProvider(tp)
+    ```
+
+    Use your router's OpenTelemetry middleware so server spans carry `http.route`.
+  </Tab>
+  <Tab title="Rust">
+    Build the span exporter on the HTTP transport of `opentelemetry-otlp`. It reads the traces endpoint variable.
+
+    ```rust
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_http()
+        .build()?;
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .build();
+    opentelemetry::global::set_tracer_provider(provider.clone());
+    ```
+
+    If your crate version does not read `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, pass the header with `.with_headers(...)` on the builder. Call `provider.shutdown()` before exit to flush the last batch.
+  </Tab>
+</Tabs>
+
+{/* TODO: verify the Java, Python, Go and Rust notes against running services; examples/test-api exercises Node.js only. In particular, confirm which opentelemetry-otlp versions read OTEL_EXPORTER_OTLP_TRACES_HEADERS. */}
+
+## Confirm data is arriving
+
+Open **Setup** in the dashboard and reload it. The **API** line under **Is data arriving?** reads `N requests in the last 24 hours` once data is stored. `connected, waiting for traffic` means the key exists but nothing has been stored yet. The collector flushes aggregates every 15 seconds, so allow up to a minute after the first request, plus your own Collector's batch delay.
+
+<AccordionGroup>
+  <Accordion title="otlp.lumenstat.com returns 404">
+    Only `/v1/traces`, `/v1/metrics` and `/v1/logs` are routed to the collector. Every other path gets a 404 at the edge. The usual cause is `/v1/traces` written into `endpoint`, which the `otlphttp` exporter extends to `/v1/traces/v1/traces`.
+  </Accordion>
+  <Accordion title="Connection errors or timeouts on port 4317">
+    The exporter is using gRPC. Lumenstat exposes OTLP over HTTP on port 443 only. Use `otlphttp` in a Collector, or set `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf` in an SDK.
+  </Accordion>
+  <Accordion title="Setup still says connected, waiting for traffic">
+    - Check the header name, `x-scf-ingest-key`, and that the variable holding the key is set in the Collector's or service's environment. A missing or wrong key fails silently: the collector answers with success and the writer drops the data.
+    - Check that the spans are server spans. Client and internal spans are not counted.
+    - Check for samplers in the pipeline that feeds Lumenstat.
+  </Accordion>
+  <Accordion title="Routes show raw paths or {unknown}">
+    The server spans have no `http.route`. Add your framework's instrumentation, or let Lumenstat [normalize the raw path](/api/routes). `{unknown}` means the span had no route or path attribute at all, for example because a `transform` processor removed them.
+  </Accordion>
+</AccordionGroup>

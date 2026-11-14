@@ -1,0 +1,156 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "maple",
+  "name": "Lumenstat",
+  "description": "Privacy-first web and API analytics for Stellar ecosystem projects. No cookies, no stored IP addresses, and four layers of defense against inflated numbers.",
+  "colors": {
+    "primary": "#6E56CF",
+    "light": "#9E8CFC",
+    "dark": "#5746AF"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "https://lumenstat.com"
+  },
+  "appearance": {
+    "default": "system"
+  },
+  "styling": {
+    "eyebrows": "breadcrumbs",
+    "codeblocks": "system"
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "metadata": {
+    "timestamp": true
+  },
+  "contextual": {
+    "options": ["copy", "view", "claude", "chatgpt", "cursor", "vscode"]
+  },
+  "seo": {
+    "indexing": "navigable",
+    "metatags": {
+      "og:site_name": "Lumenstat Docs",
+      "og:type": "website"
+    }
+  },
+  "search": {
+    "prompt": "Search the docs"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Feedback",
+        "href": "https://lumenstat.userjot.com",
+        "icon": "message-square"
+      },
+      {
+        "type": "github",
+        "href": "https://github.com/boundlessfi/lumenstat"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Open dashboard",
+      "href": "https://app.lumenstat.com"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guides",
+        "icon": "book-open",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": ["index", "quickstart", "how-it-works"]
+          },
+          {
+            "group": "Website analytics",
+            "pages": [
+              "web/add-the-tracker",
+              "web/frameworks",
+              "web/custom-events",
+              "web/verify-the-tracker",
+              "web/self-host-the-tracker"
+            ]
+          },
+          {
+            "group": "API analytics",
+            "pages": ["api/overview", "api/node", "api/collector", "api/routes"]
+          },
+          {
+            "group": "Dashboard",
+            "pages": ["dashboard/your-numbers", "dashboard/flagged-traffic"]
+          },
+          {
+            "group": "For SCF operators",
+            "pages": ["operators/overview", "operators/enrollment", "operators/traffic-quality"]
+          }
+        ]
+      },
+      {
+        "tab": "Trust",
+        "icon": "shield-check",
+        "groups": [
+          {
+            "group": "Privacy",
+            "pages": ["trust/privacy"]
+          },
+          {
+            "group": "Integrity",
+            "pages": ["trust/bot-defense", "trust/tracker-supply-chain", "trust/tenant-isolation"]
+          },
+          {
+            "group": "Security",
+            "pages": ["trust/security-policy"]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "icon": "square-code",
+        "groups": [
+          {
+            "group": "Tracker",
+            "pages": ["reference/tracker-attributes", "reference/tracker-releases"]
+          },
+          {
+            "group": "API",
+            "pages": ["reference/otlp-ingest", "reference/metrics-api", "reference/flag-reasons"]
+          },
+          {
+            "group": "Self-hosting",
+            "pages": ["self-hosting/overview", "self-hosting/configuration", "self-hosting/infrastructure-as-code"]
+          }
+        ]
+      },
+      {
+        "tab": "Project",
+        "icon": "milestone",
+        "groups": [
+          {
+            "group": "Project",
+            "pages": ["project/roadmap", "project/changelog", "project/open-source", "project/feedback"]
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/boundlessfi/lumenstat",
+      "website": "https://lumenstat.com"
+    }
+  },
+  "errors": {
+    "404": {
+      "redirect": false,
+      "title": "Page not found",
+      "description": "This page does not exist. Try the search, or start from the [introduction](/)."
+    }
+  }
+}

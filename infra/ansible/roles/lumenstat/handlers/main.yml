@@ -1,0 +1,18 @@
+---
+# (Re)creates cloudflared so it picks up the new token from the env file.
+- name: Start the tunnel
+  ansible.builtin.command:
+    chdir: "{{ lumenstat_root }}/src/deploy"
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - "{{ lumenstat_root }}/.env"
+      - -f
+      - compose.yaml
+      - --profile
+      - public
+      - up
+      - -d
+      - cloudflared
+  changed_when: true

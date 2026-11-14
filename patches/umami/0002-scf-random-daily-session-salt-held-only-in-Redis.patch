@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Collins Ikechukwu <collinschristroa@gmail.com>
 Date: Fri, 13 Nov 2026 08:19:02 +0100
-Subject: [PATCH 2/3] scf: random daily session salt held only in Redis
+Subject: [PATCH 2/5] scf: random daily session salt held only in Redis
 
 SCF_RANDOM_DAILY_SALT replaces the date-derived session salt with a random
 salt per UTC day. It is stored in Redis with a 48-hour TTL (process memory

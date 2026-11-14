@@ -1,0 +1,275 @@
+---
+title: "Self-hosting overview"
+sidebarTitle: "Overview"
+description: "Run the whole Lumenstat stack on one Linux server with Docker Compose, reachable only through a Cloudflare Tunnel."
+icon: "server"
+---
+
+Lumenstat runs as one Docker Compose project on one Linux host: PostgreSQL, Redis, the patched Umami, the OpenTelemetry Collector, the writer, the dashboard and `cloudflared`. No port is published. The only way in is a Cloudflare Tunnel that `cloudflared` opens outbound, and it routes only the dashboard, the tracker files, the collect endpoint and the OTLP endpoints.
+
+The files are [`deploy/compose.yaml`](https://github.com/boundlessfi/lumenstat/blob/main/deploy/compose.yaml), [`deploy/deploy.sh`](https://github.com/boundlessfi/lumenstat/blob/main/deploy/deploy.sh) and [`deploy/bootstrap.sh`](https://github.com/boundlessfi/lumenstat/blob/main/deploy/bootstrap.sh). [Infrastructure as code](/self-hosting/infrastructure-as-code) describes the same setup with OpenTofu and Ansible, and [Configuration](/self-hosting/configuration) lists every variable.
+
+## Services
+
+| Service | Image or source | What it does | Memory, CPUs |
+| --- | --- | --- | --- |
+| `postgres` | `postgres:17-alpine` | One database, `lumenstat`: Umami's tables, flagged events in `scf_flagged_event`, API metrics in the `scf_api` schema. Data in the `pgdata` volume. | 1 GB, 1.5 |
+| `redis` | `redis:8-alpine` | Daily salts and per-network visitor counters. No persistence (`--save ""`, `--appendonly no`), 200 MB cap with `noeviction`, so a salt is never dropped mid-day. | 256 MB, 0.5 |
+| `umami` | Built from `vendor/umami`: Umami v3.5.0 plus `patches/umami`, collect path `/e` | Tracker files, collect endpoint, privacy patches and quality checks. Port 3000. | 1 GB, 1.5 |
+| `writer` | Built from `apps/writer` | Receives metrics from the collector, normalizes routes, stores histograms, serves the metrics API. Port 8080. | 256 MB, 0.5 |
+| `collector` | `otel/opentelemetry-collector-contrib:0.164.0` with `apps/collector/config.yaml` | OTLP ingest: 4318 (HTTP) and 4317 (gRPC). Health check on 13133. | 512 MB, 1 |
+| `dashboard` | Built from `apps/dashboard` | The UI for project teams and SCF operators, and self-service enrollment. Port 3200. | 512 MB, 1 |
+| `cloudflared` | `cloudflare/cloudflared:2026.10.7`, profile `public` | The outbound tunnel. Starts only once a tunnel token is set. | 256 MB, 0.5 |
+
+Every service restarts unless stopped, and every service has memory and CPU limits, so the stack can share a host with other projects. The ports above are on the stack's private network only.
+
+## Network: no published ports
+
+```mermaid
+flowchart LR
+  V["Visitors, APIs,<br/>dashboard users"] --> CF["Cloudflare edge<br/>TLS, DNS, routes"]
+  subgraph Host["Your server: no published ports"]
+    CD["cloudflared"]
+    D["dashboard :3200"]
+    U["umami :3000"]
+    C["collector :4318"]
+    W["writer :8080"]
+    P[("postgres")]
+    R[("redis")]
+  end
+  CD -- "outbound tunnel" --> CF
+  CF --> CD
+  CD --> D
+  CD --> U
+  CD --> C
+  D --> U
+  D --> W
+  C --> W
+  U --> P
+  U --> R
+  W --> P
+```
+
+`cloudflared` connects out to Cloudflare. Cloudflare matches each request against the tunnel's routes, in order, and sends it down the tunnel to a Compose service by name:
+
+| Hostname | Path (regular expression) | Service |
+| --- | --- | --- |
+| `app.example.com` | any | `http://dashboard:3200` |
+| `t.example.com` | `^/(script\.js\|api/send\|e\|v/[0-9]+\.[0-9]+\.[0-9]+/l\.js)$` | `http://umami:3000` |
+| `otlp.example.com` | `^/v1/(traces\|metrics\|logs)$` | `http://collector:4318` |
+| anything else | | `http_status:404` |
+
+**Why `t.` has a path rule.** Umami serves its admin interface, its login and its REST API on the same port as the tracker. The expression lets through four paths and nothing else: the versioned releases under `/v/`, the legacy `/script.js`, the collect endpoint `/e` and the legacy `/api/send`. It is anchored at both ends, so `/e/anything` or `/api/send/x` does not match. Every other path on `t.` falls through to the 404 rule at Cloudflare's edge. Umami's login page and API never receive a request from the internet. Admin work goes over the private network: the dashboard calls `http://umami:3000` with the admin account to enroll projects.
+
+Other consequences of the routes:
+
+- **OTLP is HTTP only** from outside. The collector also listens for gRPC on 4317, but no route reaches it.
+- **The writer has no route.** The metrics API answers on the private network, where the dashboard reads it.
+- **The visitor IP comes from Cloudflare.** Umami reads it from `cf-connecting-ip` (`CLIENT_IP_HEADER`). The origin is reachable only through the tunnel, so a client cannot set that header itself.
+
+Create the tunnel and its routes by hand (in Cloudflare: **Networking → Tunnels →** your tunnel **→ Routes**) or with [OpenTofu](/self-hosting/infrastructure-as-code). Either way it must be a remotely managed tunnel, so `cloudflared` runs with a token and no local config.
+
+## First deploy
+
+You need:
+
+- **On your machine:** a checkout of the repository, Node 24, `ssh` access to the server, and `tar`.
+- **On the server:** Linux with Docker Engine and the Compose plugin, `openssl`, and a login user that can `sudo` and run `docker`. The [Ansible playbook](/self-hosting/infrastructure-as-code#ansible) can prepare an Ubuntu 24.04 host for you.
+- **At Cloudflare:** a zone for your domain and a remotely managed tunnel with the routes above.
+
+<Steps>
+  <Step title="Build vendor/umami">
+    `vendor/umami` is generated: the pinned Umami tag plus the patches. The tracker check in the next steps runs Rollup inside it, so install its dependencies too.
+
+    ```bash
+    scripts/sync-umami.sh
+    (cd vendor/umami && npx -y pnpm@12.3.4 install --frozen-lockfile --ignore-scripts)
+    ```
+  </Step>
+
+  <Step title="Point the dashboard at your hostnames">
+    In `deploy/compose.yaml`, set the dashboard's public addresses, which appear in every setup snippet:
+
+    ```yaml deploy/compose.yaml
+    dashboard:
+      environment:
+        PUBLIC_UMAMI_URL: https://t.example.com
+        PUBLIC_COLLECTOR_URL: https://otlp.example.com
+    ```
+
+    Tracker releases send to `https://t.lumenstat.com` by default. When `PUBLIC_UMAMI_URL` is anything else, the Setup page adds `data-host-url` to the snippet so events reach your server.
+  </Step>
+
+  <Step title="Run the deploy script">
+    ```bash
+    deploy/deploy.sh <ssh host>
+    ```
+
+    `<ssh host>` is an alias from your `~/.ssh/config` or `user@host`. On your machine the script:
+
+    1. stops if `vendor/umami` is missing;
+    2. runs `node scripts/build-tracker.mjs --check`, so the released tracker must match the patched source byte for byte;
+    3. runs `scripts/stage-tracker-releases.sh`, which copies every release to `vendor/umami/public/v/<version>/l.js`;
+    4. creates `/srv/lumenstat` and `/srv/lumenstat/src` on the server (mode 750, owned by your login user);
+    5. streams `apps`, `deploy`, `vendor/umami`, `patches`, `README.md` and `LICENSE` over `ssh` into `/srv/lumenstat/src`, without `node_modules`, `.next`, `.git`, `.env` files or build output;
+    6. runs `deploy/bootstrap.sh` on the server.
+
+    `bootstrap.sh` is safe to run again. It:
+
+    1. creates `/srv/lumenstat/.env` with random secrets, on the first run only, with mode 600;
+    2. builds the images and starts every service except `cloudflared`;
+    3. waits up to seven and a half minutes for Umami's heartbeat, then replaces Umami's default `admin` / `umami` password with `UMAMI_ADMIN_PASSWORD` from the env file, over the private network, before anything is reachable;
+    4. starts `cloudflared` if `CLOUDFLARE_TUNNEL_TOKEN` is set, and otherwise says the stack is running but not reachable.
+  </Step>
+
+  <Step title="Add the tunnel token">
+    Put the token in the env file on the server, never in git:
+
+    ```bash /srv/lumenstat/.env
+    CLOUDFLARE_TUNNEL_TOKEN=<tunnel token>
+    ```
+
+    Then run `deploy/deploy.sh <ssh host>` again, or start the tunnel on the server:
+
+    ```bash
+    cd /srv/lumenstat/src/deploy
+    docker compose --env-file /srv/lumenstat/.env -f compose.yaml --profile public up -d
+    ```
+  </Step>
+
+  <Step title="Confirm it works">
+    ```bash
+    curl -sI https://t.example.com/v/1.0.0/l.js | grep -i cache-control
+    # cache-control: public, max-age=31536000, immutable
+
+    curl -s -o /dev/null -w '%{http_code}\n' https://t.example.com/api/heartbeat
+    # 404: Umami's API is not reachable from the internet
+    ```
+
+    Then sign in at `https://app.example.com` as `admin` with `UMAMI_ADMIN_PASSWORD` from `/srv/lumenstat/.env`. Umami admins are SCF operators, so you see the operator screens.
+  </Step>
+</Steps>
+
+## On the server
+
+```bash
+cd /srv/lumenstat/src/deploy
+alias dc='docker compose --env-file /srv/lumenstat/.env -f compose.yaml'
+dc ps                              # status
+dc logs -f umami                   # one service's logs
+dc logs umami | grep event_flagged # flagged events, one JSON line each
+dc --profile public up -d          # everything, tunnel included
+```
+
+## Updating
+
+Run `deploy/deploy.sh <ssh host>` again. It repeats the tracker check, copies the sources over `/srv/lumenstat/src`, rebuilds the images and recreates the containers that changed. The database volume and `/srv/lumenstat/.env` are kept, and the password step reports that the default password was already replaced. Umami applies its Prisma migrations and the writer applies `apps/writer/db/migrations` when they start.
+
+<Note>
+  The copy adds and overwrites files but never deletes them. A file removed from the repository stays in `/srv/lumenstat/src` until you remove it there.
+</Note>
+
+- **Data-center ranges.** After `node scripts/update-datacenter-ranges.mjs` and a deploy, run `dc restart umami`. The file is mounted read-only and Umami keeps it in memory, so a changed file alone does not recreate the container.
+- **Umami itself.** Bump `UMAMI_TAG` in `scripts/sync-umami.sh`, run it, fix any conflicts in `vendor/umami`, then write the patches back with `scripts/export-umami-patches.sh`. Every upgrade is a reviewed diff.
+
+## Privacy: serve `t.` and `otlp.` DNS-only
+
+<Warning>
+  In this setup `t.` and `otlp.` go through Cloudflare. Cloudflare terminates TLS for them and sees visitor IP addresses and requests in transit, as a sub-processor. The hosted service runs this way in its pilot. Its production design serves those two hostnames DNS-only from EU servers, so no CDN sees visitor IPs, and keeps only the dashboard behind the tunnel.
+</Warning>
+
+<Note>
+  **Planned:** serving `t.` and `otlp.` directly from EU servers is part of Milestone 3 for the hosted service. The repository does not include a configuration for it yet.
+</Note>
+
+To do it on your own instance, point DNS-only records for `t.` and `otlp.` at your server and terminate TLS there, for example with Caddy and Let's Encrypt. That reverse proxy publishes a port, so the "no published ports" property then holds for the dashboard only. Change these at the same time:
+
+- **The path allow-list.** Apply the same two expressions in your proxy, or Umami's login and API become public.
+- **`CLIENT_IP_HEADER`.** `cf-connecting-ip` is no longer set by Cloudflare, and any client could send it. Set it to the header your proxy writes, and make the proxy overwrite any value the client sent. Otherwise a client chooses the IP that the data-center and per-network checks see.
+- **Keep `SKIP_LOCATION_HEADERS=1`.** `deploy/compose.yaml` already sets it, so Umami ignores `cf-ipcountry` and looks the country up in its own GeoLite database. Without it, and without Cloudflare in front, a client could send that header and pick its own country.
+- **DNS in OpenTofu.** The module creates proxied CNAMEs for all three hostnames. Change the records for `t.` and `otlp.`.
+
+{/* TODO: no tested DNS-only configuration exists in the repository. Replace this list with the real setup once Milestone 3 ships it. */}
+
+## Run locally for development
+
+The root [`docker-compose.yml`](https://github.com/boundlessfi/lumenstat/blob/main/docker-compose.yml) runs the core services with ports bound to `127.0.0.1`, and adds a test site and an instrumented test API under the `examples` profile.
+
+```bash
+scripts/setup-env.sh                       # writes .env with random secrets
+scripts/sync-umami.sh                      # vendor/umami = Umami v3.5.0 + the patches
+docker compose up -d --build               # core services
+node scripts/seed-dev.mjs                  # registers the test site, pins the tracker's SRI hash
+scripts/create-api-tenant.sh               # API tenant + ingest key (saved to .env) + tenant read key
+docker compose --profile examples up -d    # test site on :8088, test API on :3100 and :3101
+scripts/traffic.sh                         # API traffic, including Stellar addresses in paths
+```
+
+| Service | Local port |
+| --- | --- |
+| `postgres` (database and user `scf`) | 5440 |
+| `redis` | 6380 |
+| `umami` | 3000 |
+| `collector` | 4317, 4318, health on 13133 |
+| `writer` | 8090 |
+| `test-site`, `test-api` (`--profile examples`) | 8088, 3100, 3101 |
+| `dashboard` (on the host) | 3200 |
+
+Then:
+
+- Open Umami at `http://localhost:3000`. The first-run login is `admin` / `umami`; change it.
+- Visit `http://localhost:8088` to generate page views.
+- Open the API dashboard at `http://localhost:8090/dashboard` with the read key from `create-api-tenant.sh`, or the operator key in `.env`.
+- Run `scripts/smoke-web.sh <website id>` to see which requests the collect endpoint counts and which it rejects.
+
+To run the dashboard, from `apps/dashboard`:
+
+```bash
+cp .env.example .env.local     # WRITER_API_KEY: npm run key:create -- --label dashboard (in apps/writer)
+npm ci && npm run build && npm start   # http://localhost:3200
+```
+
+The local stack differs from the server in ways that matter when testing:
+
+- Only `SCF_ENFORCE_ORIGIN` of the quality switches is on. Layers 2 to 4 are off.
+- Umami is built without `COLLECT_API_ENDPOINT`, so the collect endpoint is `/api/send` only. The test site uses Umami's own `/script.js`, which posts there. Tracker releases and `scripts/fake-event.mjs` post to `/e`. To use them locally, build with `docker compose build --build-arg COLLECT_API_ENDPOINT=/e umami`.
+- No `CLIENT_IP_HEADER` is set, so Umami trusts `x-forwarded-for` from any client. `fake-event.mjs --ip` relies on that to test layers 3 and 4.
+
+<AccordionGroup>
+  <Accordion title="Without building the app images">
+    If Docker Hub is slow or unreachable, run only the data services in Docker and the apps on the host, with Node 24 and pnpm 12:
+
+    ```bash
+    docker compose up -d postgres redis
+    SCF_WRITER_ENDPOINT=http://host.docker.internal:8090 docker compose up -d --no-deps collector
+    set -a; . ./.env; set +a
+    export DATABASE_URL="postgresql://scf:${POSTGRES_PASSWORD}@127.0.0.1:5440/scf"
+
+    (cd apps/writer && npm ci && PORT=8090 node src/server.ts) &
+    (cd vendor/umami && pnpm install --frozen-lockfile && APP_SECRET="$UMAMI_APP_SECRET" SKIP_BUILD_GEO=1 pnpm build \
+      && REDIS_URL=redis://127.0.0.1:6380 APP_SECRET="$UMAMI_APP_SECRET" SKIP_LOCATION_HEADERS=1 \
+         SCF_COUNTRY_ONLY=1 SCF_FRONTEND_ONLY=1 SCF_STRIP_QUERY=1 SCF_RANDOM_DAILY_SALT=1 SCF_ENFORCE_ORIGIN=1 pnpm start) &
+    python3 -m http.server 8088 --bind 127.0.0.1 --directory examples/test-site &
+    (cd examples/test-api && npm ci && SCF_INGEST_KEY="$TEST_API_INGEST_KEY" npm start) &
+    ```
+
+    `SKIP_BUILD_GEO=1` skips the GeoLite download. Local IPs have no country anyway.
+  </Accordion>
+
+  <Accordion title="Tests">
+    ```bash
+    cd apps/writer && npm test                       # normalization, histograms, OTLP parsing, tenant mapping
+    cd vendor/umami && pnpm vitest run src/lib/scf   # the Umami patches
+    cd apps/dashboard && npm run build               # type checks every page
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Limits
+
+- One server, one stack in `/srv/lumenstat`. There is no failover, and a second environment needs its own host.
+- No backups, monitoring or alerts are set up by these files.
+
+<Note>
+  **Planned:** off-site backups in the EU with a restore drill, alerts and a public status page, and ingest in two locations with failover are part of Milestone 3. See the [roadmap](/project/roadmap).
+</Note>

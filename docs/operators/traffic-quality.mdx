@@ -1,0 +1,89 @@
+---
+title: "Traffic quality"
+description: "Read the Traffic quality screen, inspect a website's latest flagged events, and decide what to do about a project with a lot of flagged traffic."
+icon: "shield-alert"
+---
+
+**Traffic quality** lists every website of every project, with its counted page views next to the events that failed the bot and inflation checks. Flagged events are stored apart and never counted, so this screen shows attempts, not damage to anyone's numbers. A high flagged share says a website is being targeted or is misconfigured. It does not say who sent the traffic.
+
+## Read the table
+
+| Column | Meaning |
+| --- | --- |
+| Project | The project the website belongs to |
+| Website | The website's domain |
+| Counted page views | Page views that passed every check in the range |
+| Flagged events | Events that failed at least one check in the range, page views and custom events together |
+| Flagged share | Flagged events divided by the sum of counted page views and flagged events |
+| Why | Each reason with its count, largest first |
+
+Rows are sorted by flagged events, then by counted page views, largest first. Every website is listed, including those with nothing flagged. The **Range** picker covers the last 24 hours, 7 days (the default) or 30 days.
+
+- **Reasons can add up to more than the flagged events.** One event can fail several checks, and each failed check is counted in **Why**.
+- **The share mixes two kinds of event.** Its counted side is page views only, while flagged events include custom events. A website whose flagged traffic is mostly custom events shows a slightly higher share than its page views alone would give.
+- **"Flagged traffic is unavailable (Umami unreachable)"** means the flagged summary could not be loaded. The counted page views may still show.
+
+**Why** uses the dashboard's names for each reason. [Flagged traffic](/dashboard/flagged-traffic#read-the-card) maps each name to its code and its usual causes, and [Flag reasons](/reference/flag-reasons) defines the codes.
+
+## Inspect a website
+
+Below the table, **Inspect a site** links to up to 12 websites that have flagged events in the range. Selecting one adds `site=<website id>` to the URL and shows **Latest flagged events** for that website: the 50 most recent in the range.
+
+| Column | Meaning |
+| --- | --- |
+| Time (UTC) | When the event arrived |
+| Path | The page path. For a custom event, the event name follows in parentheses |
+| Why | Every reason the event was flagged |
+| Referrer | The referring domain |
+| Country | The visitor's country |
+| Client | Browser, OS and device type |
+
+Flagged events keep the path, referrer domain, country and coarse device only. IP addresses and query strings are never stored.
+
+While a website is selected, the table counts flagged events for that website only, and every other website shows zero. Changing the range keeps the selection. To see all websites again, select **Traffic quality** in the navigation.
+
+## What to do about a project with a lot of flagged traffic
+
+<Steps>
+  <Step title="Find it and size it">
+    The website is near the top of the table. Compare its flagged share with projects of similar size, and switch between **Last 24 hours** and **Last 30 days** to tell a one-off burst from a steady pattern.
+  </Step>
+
+  <Step title="Inspect its latest flagged events">
+    Select the website under **Inspect a site** and read the 50 latest events. Look at the timing (regular bursts or spread through the day), the paths (one URL over and over, or real pages), and the client column (one identical client string, or a normal mix).
+  </Step>
+
+  <Step title="Match the reasons to a cause">
+    The combination of reasons usually points to the cause:
+
+    | Reasons | Likely cause | Response |
+    | --- | --- | --- |
+    | "Sent from another domain", with no proof failure | The project's own tracker running on a host it did not enroll: a preview deploy, `localhost`, staging, a new domain | Ask the project to set `data-domains`, or add the domain |
+    | "No browser origin" with "No proof of JavaScript", often with "Data-center IP" | Scripted posts from a server | Nothing for the numbers. Watch whether it persists |
+    | "No proof of JavaScript" alone | A script that forged browser headers without running the tracker, or a page loading a tracker without the proof, such as upstream Umami's script | Check that the project's pages load `t.lumenstat.com/v/<version>/l.js` |
+    | "Not a browser request", with no proof failure | The tracker ran, but the request had no Fetch Metadata: a browser too old to send it, or a page not served over HTTPS | Check that the site is served over HTTPS |
+    | "Invalid proof of JavaScript" | A proof made for another page, website or 10-minute window: device clocks off by more than about 10 minutes, or replayed headers | A trickle is normal. A burst points to replay |
+    | "Data-center IP" | Automation on cloud servers, or visitors on a VPN hosted there | A small, steady share is normal |
+    | "Too many visitors from one network" | More than 150 new visitors to the website in one hour from one /24 or /48 network | Check the times. A spike during an event the project ran can be real people on one network |
+    | "Site has no domain" | The website has no domain recorded | Configuration: give the website its domain |
+  </Step>
+
+  <Step title="Check the counted numbers">
+    Open the project from **All projects** and look at **Overview** and **Website** for the same range. Flagged events are not in those numbers. If counted traffic also jumped at the same moment, with an unusual shape, that traffic passed every check, and the checks alone cannot settle it. Put the project next to similar ones in **Compare**.
+  </Step>
+
+  <Step title="Act on what you found">
+    - **A configuration problem:** contact the project. For a project that signed up itself, the contact email is on **Enrollment**: in its queue entry, or under **Recent decisions** for the latest 50. Typical fixes are `data-domains`, HTTPS, the pinned Lumenstat tracker and a missing domain. [Framework recipes](/web/frameworks) has the exact tag.
+    - **A deliberate attempt:** nothing is needed to protect the numbers, because flagged events are already excluded. Note the range, the reasons and the share if you need to refer to it later.
+  </Step>
+</Steps>
+
+<Warning>
+  Do not treat flagged traffic as evidence against the project on its own. A website id is public in every page that carries the tracker, and anyone can send events at any project, including to make it look as if it were inflating its numbers.
+</Warning>
+
+## Limits
+
+- **Requests rejected before the checks are not shown.** Umami's own bot check, by user agent, and its IP block list drop requests before the four layers run. Those are not stored.
+- **Fake traffic that passes every check is counted and does not appear here.** A real browser running the tracker from a home or mobile network passes all four layers. An anomaly view for sudden changes in traffic or flagged share is planned for Milestone 2.
+- **The screen calls Umami once per project and once per website on each load.** It slows down as enrollment grows. Aggregated queries and CSV export for the operator view are planned for Milestone 2.

@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Collins Ikechukwu <collinschristroa@gmail.com>
+Date: Fri, 13 Nov 2026 23:58:43 +0100
+Subject: [PATCH 5/5] scf: ship the GeoLite database in the Docker image
+
+Next's standalone output does not trace geo/, so the runner image had no
+GeoLite database. Umami then fell back to CDN headers for the country
+(Cloudflare's cf-ipcountry, derived from the full IP), and setting
+SKIP_LOCATION_HEADERS would have made every lookup fail.
+
+Copy geo/ into the runner, and create it in the builder even when
+SKIP_BUILD_GEO is set so the COPY always has a source. With
+SKIP_LOCATION_HEADERS=1, the country now comes from Umami's own lookup on
+the IP cut to /24 or /48 (SCF_COUNTRY_ONLY).
+---
+ Dockerfile | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/Dockerfile b/Dockerfile
+index 072154d..109af04 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -47,6 +47,9 @@ ARG SKIP_BUILD_GEO
+ ENV SKIP_BUILD_GEO=$SKIP_BUILD_GEO
+ 
+ RUN pnpm build:docker
++# SCF: geo/ holds the GeoLite database build:geo downloads. Create it even when
++# SKIP_BUILD_GEO is set, so the runner's COPY below always has a source.
++RUN mkdir -p geo
+ 
+ # Production image, copy all the files and run next
+ FROM node:${NODE_IMAGE_VERSION} AS runner
+@@ -96,6 +99,11 @@ COPY --from=builder /app/prisma ./prisma
+ COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
+ COPY --from=builder /app/scripts ./scripts
+ COPY --from=builder /app/generated ./generated
++# SCF: Next's standalone output does not trace geo/, so without this the image
++# has no GeoLite database and can only take the country from CDN headers. With
++# it, SKIP_LOCATION_HEADERS=1 makes Umami look up the IP cut to /24 or /48
++# (SCF_COUNTRY_ONLY) instead of trusting cf-ipcountry.
++COPY --from=builder --chown=nextjs:nodejs /app/geo ./geo
+ 
+ # Automatically leverage output traces to reduce image size
+ # https://nextjs.org/docs/advanced-features/output-file-tracing

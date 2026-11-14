@@ -1,0 +1,14 @@
+---
+# Copy to hosts.yml (git-ignored) and fill in the real server. Placeholders only.
+all:
+  children:
+    lumenstat:
+      hosts:
+        lumenstat-production:
+          ansible_host: server.example.com
+          ansible_user: deploy # sudoer with your SSH key; not root
+          # ansible_port: 22
+      # Secret: the tunnel token from `tofu output -raw tunnel_token`.
+      # Do not write it here; see infra/README.md (Secrets).
+      # vars:
+      #   lumenstat_cloudflare_tunnel_token: ...

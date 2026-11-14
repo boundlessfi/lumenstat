@@ -1,0 +1,76 @@
+# Adopting a zone and tunnel that were set up by hand (see infra/README.md).
+#
+#   cp imports.tf.example imports.tf      # imports.tf is git-ignored
+#   # replace the <...> IDs below
+#   tofu plan                             # must show only "import" and small in-place updates
+#   tofu apply
+#   rm imports.tf
+#
+# Without this, the first apply would try to create a second tunnel, duplicate
+# DNS records and a second rate limiting ruleset, and fail half-way.
+
+# Tunnel and its routes: <tunnel id> is on Networking > Tunnels.
+import {
+  to = module.lumenstat.cloudflare_zero_trust_tunnel_cloudflared.this
+  id = "${var.account_id}/<tunnel id>"
+}
+
+import {
+  to = module.lumenstat.cloudflare_zero_trust_tunnel_cloudflared_config.this
+  id = "${var.account_id}/<tunnel id>"
+}
+
+# The three CNAMEs to <tunnel id>.cfargotunnel.com (record IDs: see the README).
+import {
+  to = module.lumenstat.cloudflare_dns_record.tunnel["app"]
+  id = "${var.zone_id}/<record id of app>"
+}
+
+import {
+  to = module.lumenstat.cloudflare_dns_record.tunnel["t"]
+  id = "${var.zone_id}/<record id of t>"
+}
+
+import {
+  to = module.lumenstat.cloudflare_dns_record.tunnel["otlp"]
+  id = "${var.zone_id}/<record id of otlp>"
+}
+
+# No-mail records. Drop a block if that record does not exist yet; apply creates it.
+import {
+  to = module.lumenstat.cloudflare_dns_record.mail["spf"]
+  id = "${var.zone_id}/<record id of the apex SPF TXT>"
+}
+
+import {
+  to = module.lumenstat.cloudflare_dns_record.mail["dmarc"]
+  id = "${var.zone_id}/<record id of _dmarc TXT>"
+}
+
+import {
+  to = module.lumenstat.cloudflare_dns_record.mail["mx"]
+  id = "${var.zone_id}/<record id of the null MX>"
+}
+
+# The zone's http_ratelimit entry point ruleset.
+import {
+  to = module.lumenstat.cloudflare_ruleset.rate_limit[0]
+  id = "zones/${var.zone_id}/<ruleset id>"
+}
+
+# Zone settings and DNSSEC need only the zone ID.
+import {
+  to = module.lumenstat.cloudflare_zone_dnssec.this[0]
+  id = var.zone_id
+}
+
+import {
+  for_each = toset(["ssl", "always_use_https", "min_tls_version"])
+  to       = module.lumenstat.cloudflare_zone_setting.this[each.key]
+  id       = "${var.zone_id}/${each.key}"
+}
+
+import {
+  to = module.lumenstat.cloudflare_zone_setting.hsts[0]
+  id = "${var.zone_id}/security_header"
+}

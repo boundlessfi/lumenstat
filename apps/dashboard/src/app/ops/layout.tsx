@@ -13,6 +13,7 @@ export default async function OperatorLayout({ children }: { children: ReactNode
       nav={[
         { href: '/ops/projects', label: 'All projects' },
         { href: '/ops/compare', label: 'Compare' },
+        { href: '/ops/quality', label: 'Traffic quality' },
         { href: '/ops/enrollment', label: 'Enrollment' },
         { href: '/ops/keys', label: 'Keys and health' },
       ]}
