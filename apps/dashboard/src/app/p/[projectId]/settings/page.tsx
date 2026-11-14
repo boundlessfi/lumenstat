@@ -58,8 +58,8 @@ export default async function SettingsPage({ params }: { params: Promise<{ proje
             Keys, tracker upgrades and your data
           </Heading>
           <Banner variant="secondary">
-            During the MVP an SCF operator issues ingest keys, adds domains and runs exports or deletions on request. Self-service key
-            rotation, tracker upgrade notices, CSV export and date-range deletion are planned for the next milestones.
+            Project owners issue API ingest keys on the Setup page. An SCF operator adds domains and runs exports or deletions on request;
+            tracker upgrade notices, CSV export and date-range deletion are planned for the next milestones.
           </Banner>
         </div>
       </Card>

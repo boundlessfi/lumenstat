@@ -66,6 +66,21 @@ body {
   box-sizing: border-box;
 }
 
+/* Side by side on wider screens: the menu stays in view while the page scrolls.
+   On phones it stacks above the content and scrolls away with it. */
+@media (min-width: 768px) {
+  .shell {
+    flex-wrap: nowrap;
+  }
+
+  .shell-nav {
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    overflow-y: auto;
+  }
+}
+
 .page {
   max-width: 1120px;
   display: flex;

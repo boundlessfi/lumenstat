@@ -31,6 +31,47 @@ export interface TenantStat {
   p95Ms: number | null;
 }
 
+export type EnrollmentStatus = 'pending' | 'approved' | 'rejected';
+
+export interface Enrollment {
+  enrollmentId: string;
+  projectName: string;
+  domains: string[];
+  stellarLink: string;
+  contact: string;
+  umamiUserId: string;
+  umamiTeamId: string;
+  status: EnrollmentStatus;
+  tenantId: string | null;
+  createdAt: Date;
+  decidedAt: Date | null;
+  decidedBy: string | null;
+  note: string | null;
+}
+
+export type NewEnrollment = Pick<
+  Enrollment,
+  'projectName' | 'domains' | 'stellarLink' | 'contact' | 'umamiUserId' | 'umamiTeamId'
+>;
+
+function toEnrollment(r: Record<string, unknown>): Enrollment {
+  return {
+    enrollmentId: r.enrollment_id as string,
+    projectName: r.project_name as string,
+    domains: r.domains as string[],
+    stellarLink: r.stellar_link as string,
+    contact: r.contact as string,
+    umamiUserId: r.umami_user_id as string,
+    umamiTeamId: r.umami_team_id as string,
+    status: r.status as EnrollmentStatus,
+    tenantId: (r.tenant_id as string | null) ?? null,
+    createdAt: r.created_at as Date,
+    decidedAt: (r.decided_at as Date | null) ?? null,
+    decidedBy: (r.decided_by as string | null) ?? null,
+    note: (r.note as string | null) ?? null,
+  };
+}
+
 const UPSERT_CHUNK = 500;
 const KEY_CACHE_MS = 60_000;
 
@@ -293,5 +334,51 @@ export class Store {
       umamiTeamId,
     ]);
     return (rowCount ?? 0) > 0;
+  }
+
+  /** Issues another ingest key for a tenant. Existing keys keep working until revoked. */
+  async createIngestKey(tenantId: string, label: string): Promise<string> {
+    const ingestKey = generateKey('scf_ingest');
+    await this.pool.query('insert into scf_api.ingest_key (key_hash, tenant_id, label) values ($1, $2, $3)', [
+      hashKey(ingestKey),
+      tenantId,
+      label,
+    ]);
+    return ingestKey;
+  }
+
+  async createEnrollment(input: NewEnrollment): Promise<Enrollment> {
+    const { rows } = await this.pool.query(
+      `insert into scf_api.enrollment (project_name, domains, stellar_link, contact, umami_user_id, umami_team_id)
+       values ($1, $2, $3, $4, $5, $6) returning *`,
+      [input.projectName, input.domains, input.stellarLink, input.contact, input.umamiUserId, input.umamiTeamId],
+    );
+    return toEnrollment(rows[0]);
+  }
+
+  async listEnrollments(filter: { status?: EnrollmentStatus; teamId?: string }): Promise<Enrollment[]> {
+    const { rows } = await this.pool.query(
+      `select * from scf_api.enrollment
+        where ($1::text is null or status = $1) and ($2::uuid is null or umami_team_id = $2)
+        order by created_at desc
+        limit 500`,
+      [filter.status ?? null, filter.teamId ?? null],
+    );
+    return rows.map(toEnrollment);
+  }
+
+  /** Records a decision once; a request that was already decided is left as it is. */
+  async decideEnrollment(
+    enrollmentId: string,
+    decision: { status: 'approved' | 'rejected'; decidedBy: string; tenantId?: string | null; note?: string | null },
+  ): Promise<Enrollment | null> {
+    const { rows } = await this.pool.query(
+      `update scf_api.enrollment
+          set status = $2, decided_by = $3, tenant_id = $4, note = $5, decided_at = now()
+        where enrollment_id = $1 and status = 'pending'
+        returning *`,
+      [enrollmentId, decision.status, decision.decidedBy, decision.tenantId ?? null, decision.note ?? null],
+    );
+    return rows[0] ? toEnrollment(rows[0]) : null;
   }
 }

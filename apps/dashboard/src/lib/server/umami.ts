@@ -101,12 +101,61 @@ export const umami = {
   metrics: (token: string, websiteId: string, type: MetricType, w: Window, limit = 8) =>
     call<Point[]>(`/api/websites/${websiteId}/metrics`, token, {}, { ...span(w), type, limit }),
 
-  /** The tracker exactly as Umami serves it, for computing the SRI hash in snippets. */
-  trackerScript: async (): Promise<Uint8Array> => {
-    const res = await fetch(new URL('/script.js', BASE), { cache: 'no-store' });
+  /** A versioned tracker release exactly as Umami serves it, for computing the SRI hash in snippets. */
+  trackerScript: async (version: string): Promise<Uint8Array> => {
+    const res = await fetch(new URL(`/v/${version}/l.js`, BASE), { next: { revalidate: 3600 } });
     if (!res.ok) throw new UpstreamError(res.status, 'Umami tracker script unavailable');
     return new Uint8Array(await res.arrayBuffer());
   },
+
+  // ---- Admin calls used by enrollment. `token` must belong to an Umami admin.
+
+  createUser: (token: string, username: string, password: string) =>
+    call<{ id: string; username: string }>('/api/users', token, {
+      method: 'POST',
+      body: JSON.stringify({ username, password, role: 'user' }),
+    }),
+
+  /** Creates a team owned by `ownerId`; the admin making the call does not join it. */
+  createTeam: async (token: string, name: string, ownerId: string): Promise<UmamiTeam> => {
+    // Umami answers with [team, membership].
+    const res = await call<UmamiTeam | [UmamiTeam, unknown]>('/api/teams', token, {
+      method: 'POST',
+      body: JSON.stringify({ name, ownerId }),
+    });
+    return Array.isArray(res) ? res[0] : res;
+  },
+
+  deleteTeam: (token: string, teamId: string) => call<unknown>(`/api/teams/${teamId}`, token, { method: 'DELETE' }),
+
+  deleteUser: (token: string, userId: string) => call<unknown>(`/api/users/${userId}`, token, { method: 'DELETE' }),
+
+  createWebsite: (token: string, teamId: string, domain: string) =>
+    call<UmamiWebsite>('/api/websites', token, {
+      method: 'POST',
+      body: JSON.stringify({ name: domain, domain, teamId }),
+    }),
+
+  /** Flagged traffic per website (admins only), from the SCF patch's /api/scf/flagged. */
+  flagged: (token: string, w: Window, websiteId?: string) =>
+    call<{
+      websites: { websiteId: string; events: number; reasons: Record<string, number> }[];
+      recent?: {
+        createdAt: string;
+        reasons: string[];
+        urlPath: string | null;
+        referrerDomain: string | null;
+        country: string | null;
+        browser: string | null;
+        os: string | null;
+        device: string | null;
+        eventName: string | null;
+      }[];
+    }>('/api/scf/flagged', token, {}, {
+      startAt: Math.floor(w.startAt / 1000),
+      endAt: Math.floor(w.endAt / 1000),
+      websiteId,
+    }),
 
   heartbeat: async (): Promise<boolean> => {
     try {

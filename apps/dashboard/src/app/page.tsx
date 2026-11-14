@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Card, Heading, Text } from '@/lib/sds';
 import { requireViewer } from '@/lib/server/viewer';
@@ -18,7 +19,8 @@ export default async function Home() {
             No project yet
           </Heading>
           <Text as="p" size="sm">
-            Your account is not part of any project. Ask your project owner to invite you, or ask SCF to enroll your project.
+            Your account is not part of any project. Ask your project owner to invite you, or{' '}
+            <Link href="/signup">enroll a new project</Link>.
           </Text>
         </div>
       </Card>

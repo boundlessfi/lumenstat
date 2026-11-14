@@ -4,10 +4,11 @@ import { RangePicker } from '@/components/RangePicker';
 import { StatTile } from '@/components/StatTile';
 import { TrendChart } from '@/components/TrendChart';
 import { count, duration, percent } from '@/lib/format';
+import { reasonLabel } from '@/lib/quality';
 import { parseRange, RANGES, rangeWindow } from '@/lib/range';
 import { Card, Heading, Text } from '@/lib/sds';
 import { fillSeries } from '@/lib/series';
-import { avgVisitSeconds, bounceRate, loadTopMetric, loadWebSummary } from '@/lib/server/projects';
+import { avgVisitSeconds, bounceRate, loadFlagged, loadTopMetric, loadWebSummary } from '@/lib/server/projects';
 import type { MetricType } from '@/lib/server/umami';
 import { requireProject } from '@/lib/server/viewer';
 
@@ -31,9 +32,15 @@ export default async function WebsitePage({ params, searchParams }: Props) {
   const w = rangeWindow(key);
 
   const web = await loadWebSummary(viewer.token, project.id, w);
-  const panels = await Promise.all(
-    PANELS.map(async panel => ({ ...panel, items: await loadTopMetric(viewer.token, web.websites, panel.type, w) })),
-  );
+  const [panels, flagged] = await Promise.all([
+    Promise.all(PANELS.map(async panel => ({ ...panel, items: await loadTopMetric(viewer.token, web.websites, panel.type, w) }))),
+    loadFlagged(web.websites, w),
+  ]);
+  const flaggedItems = flagged
+    ? Object.entries(flagged.reasons)
+        .sort((a, b) => b[1] - a[1])
+        .map(([reason, n]) => ({ x: reasonLabel(reason), y: n }))
+    : [];
   const domains = web.websites.map(site => site.domain).filter(Boolean).join(' · ');
 
   return (
@@ -72,11 +79,19 @@ export default async function WebsitePage({ params, searchParams }: Props) {
         {panels.map(panel => (
           <MetricList key={panel.type} title={panel.title} items={panel.items} />
         ))}
+        {flagged ? (
+          <MetricList
+            title={`Flagged, not counted: ${count(flagged.events)}`}
+            items={flaggedItems}
+            empty="Nothing flagged in this range"
+          />
+        ) : null}
       </div>
 
       <Text as="p" size="xs" addlClassName="muted">
         Unique visitors are counted per day. The salt behind each visitor hash is deleted after 48 hours, so no one is followed across
-        days. Location is country only.
+        days. Location is country only. Events that fail the bot and inflation checks are kept apart as flagged and are not in any number
+        above.
       </Text>
     </div>
   );

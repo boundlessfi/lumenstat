@@ -64,7 +64,8 @@ export default async function KeysPage() {
           <pre className="snippet">{`npm run key:create -- --label "<who it is for>" [--tenant <tenant id>] [--days 90]
 npm run key:revoke -- <api key id>`}</pre>
           <Text as="p" size="xs" addlClassName="muted">
-            A key without --tenant reads every project. Issuing and revoking from this page is planned with enrollment.
+            A key without --tenant reads every project. API ingest keys are self-service: project owners issue them on their Setup page.
+            Issuing and revoking read keys from this page is planned for Milestone 2.
           </Text>
         </div>
       </Card>
