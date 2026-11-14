@@ -9,10 +9,10 @@ Create a remotely managed tunnel in Cloudflare and add these routes (Networking 
 | Hostname | Path | Service |
 | --- | --- | --- |
 | `app.<domain>` | (any) | `http://dashboard:3200` |
-| `t.<domain>` | `^/(script\.js\|api/send)$` | `http://umami:3000` |
+| `t.<domain>` | `^/(script\.js\|api/send\|e\|v/[0-9]+\.[0-9]+\.[0-9]+/l\.js)$` | `http://umami:3000` |
 | `otlp.<domain>` | `^/v1/(traces\|metrics\|logs)$` | `http://collector:4318` |
 
-The paths keep Umami's own admin UI and API off the internet: only the tracker script and the collect endpoint are reachable on `t.`.
+The paths keep Umami's own admin UI and API off the internet: only the tracker (the versioned releases under `/v/` and the legacy `/script.js`) and the collect endpoint (`/e`, and the legacy `/api/send`) are reachable on `t.`.
 
 `dashboard`'s `PUBLIC_UMAMI_URL` and `PUBLIC_COLLECTOR_URL` in `compose.yaml` hold the public tracker and OTLP addresses shown in setup snippets; change them for your domain.
 
@@ -52,3 +52,7 @@ Every service has CPU and memory limits, so the stack can share a host with othe
 ## Privacy note
 
 In this setup the tracker and OTLP hostnames go through Cloudflare, so Cloudflare sees visitor IPs. To keep visitor IPs away from any CDN, serve those two hostnames DNS-only from your own servers (for example behind Caddy with Let's Encrypt) and keep only the dashboard behind the tunnel.
+
+## Infrastructure as code
+
+[`infra/`](../infra/README.md) describes this setup as code: OpenTofu for the Cloudflare side (tunnel, routes, DNS, zone settings, signup rate limit) and Ansible to prepare an Ubuntu host and run the same steps as `deploy.sh`, for production and staging. It also explains how to import a zone and tunnel that were set up by hand.
