@@ -107,7 +107,7 @@ export function getCopy(config: Config = site) {
     {
       question: 'Where does Lumenstat run?',
       answer:
-        'On one Docker host in the EU, with no published ports, reached through Cloudflare Tunnel. The domain uses DNSSEC, and the infrastructure is written as code with OpenTofu and Ansible.',
+        'On one Docker host in the EU, with no published ports, reached through Cloudflare Tunnel. The domain uses DNSSEC, and the whole setup is described as code with OpenTofu and Ansible.',
     },
     {
       question: 'Is Lumenstat affiliated with the Stellar Development Foundation?',
@@ -337,7 +337,7 @@ export function getCopy(config: Config = site) {
         { text: 'One Docker host in the EU, with no published ports.', detail: 'eu · docker' },
         { text: 'Reached through Cloudflare Tunnel.', detail: 'cloudflare tunnel' },
         { text: 'DNSSEC on the domain.', detail: 'dnssec' },
-        { text: 'Infrastructure as code, with OpenTofu and Ansible.', detail: 'opentofu · ansible' },
+        { text: 'The whole setup is described as code, with OpenTofu and Ansible.', detail: 'opentofu · ansible' },
       ],
       cta: 'Read the code',
     },

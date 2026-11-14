@@ -57,7 +57,7 @@ Lumenstat is built by ${site.builtBy.name}. It is an independent project, not af
 ## Infrastructure
 
 - One Docker host in the EU, with no published ports, reached through Cloudflare Tunnel.
-- DNSSEC on the domain. Infrastructure as code with OpenTofu and Ansible.
+- DNSSEC on the domain. The whole setup is described as code with OpenTofu and Ansible.
 
 ## Links
 
