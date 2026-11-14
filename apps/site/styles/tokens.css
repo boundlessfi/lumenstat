@@ -1,0 +1,57 @@
+/* Design tokens. Color values are the Stellar Design System 4.0.2 dark theme,
+   copied here so the page does not load the full SDS stylesheet. */
+:root {
+  color-scheme: dark;
+
+  /* neutrals */
+  --gray-01: #161616; --gray-02: #1c1c1c; --gray-03: #232323; --gray-04: #282828;
+  --gray-05: #2e2e2e; --gray-06: #343434; --gray-07: #3e3e3e; --gray-08: #505050;
+  --gray-09: #707070; --gray-10: #7e7e7e; --gray-11: #a0a0a0; --gray-12: #ededed;
+  /* accent */
+  --lilac-03: #251e40; --lilac-04: #2c2250; --lilac-06: #392c72; --lilac-09: #6e56cf;
+  --lilac-10: #7c66dc; --lilac-11: #9e8cfc; --lilac-12: #f1eefe;
+  /* status */
+  --amber-03: #341c00; --amber-06: #573300; --amber-11: #f1a10d; /* flagged */
+  --green-03: #0f291e; --green-06: #164430; --green-11: #4cc38a; /* verified, valid */
+
+  --bg: var(--gray-01);
+  --surface: var(--gray-02);
+  --surface-2: var(--gray-03);
+  --line: var(--gray-06);
+  --line-strong: var(--gray-08);
+  --text: var(--gray-12);
+  --text-2: var(--gray-11);       /* secondary text: 6.9:1 on --bg */
+  --accent: var(--lilac-11);      /* text, lines, counted: 6.5:1 */
+  --accent-fill: var(--lilac-09); /* primary button, white text 5.4:1 */
+  --flagged: var(--amber-11);     /* 8.5:1 */
+  --verified: var(--green-11);
+
+  --radius-s: 6px; --radius-m: 8px; --radius-l: 12px; --radius-pill: 999px;
+
+  /* motion */
+  --dur-micro: 140ms;  /* hover, press */
+  --dur-ui: 220ms;     /* toggles, tabs, copy check */
+  --dur-enter: 560ms;  /* section reveal */
+  --dur-hero: 900ms;   /* hero words */
+  --stagger: 40ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-panel: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-ui: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  /* layout */
+  --max: 1200px;
+  --gutter: 16px;
+  --header: 64px;
+  --section: 96px;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-code: var(--font-mono), ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@media (min-width: 768px) {
+  :root { --gutter: 24px; }
+}
+@media (min-width: 1024px) {
+  :root { --gutter: 32px; --section: 144px; }
+}

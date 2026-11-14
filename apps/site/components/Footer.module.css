@@ -1,0 +1,43 @@
+.footer {
+  border-top: 1px solid var(--line);
+  padding-block: 64px 40px;
+}
+.grid {
+  display: grid;
+  gap: 40px 24px;
+  grid-template-columns: 1fr 1fr;
+}
+.about, .site { grid-column: 1 / -1; }
+.about { display: grid; gap: 8px; align-content: start; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.wordmark { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
+.tagline { color: var(--text-2); font-size: 15px; }
+.heading { margin-bottom: 12px; }
+.links { display: grid; gap: 2px; }
+.links a, .about a {
+  color: var(--text-2);
+  text-decoration: none;
+  transition: color var(--dur-micro) var(--ease-ui);
+}
+.links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  font-size: 15px;
+}
+.about a { text-decoration: underline; text-underline-offset: 3px; }
+.links a:hover, .about a:hover { color: var(--text); }
+.site p:last-child { max-width: 44ch; }
+.legal {
+  display: grid;
+  gap: 12px;
+  margin-top: 48px;
+  padding-top: 24px;
+  border-top: 1px solid var(--gray-04);
+}
+.legal p { max-width: 88ch; }
+
+@media (min-width: 1024px) {
+  .grid { grid-template-columns: 4fr 2fr 2fr 4fr; }
+  .about, .site { grid-column: auto; }
+}
