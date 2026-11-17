@@ -42,6 +42,18 @@
 
 .actions { display: flex; align-items: center; gap: 8px; }
 .signin { display: none; }
+.repo {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-s);
+  color: var(--text-2);
+  transition: color var(--dur-micro) var(--ease-ui);
+}
+.repo:hover { color: var(--text); }
+.menuRepo { gap: 10px; }
 
 /* Mobile disclosure */
 .mobile { display: block; }
@@ -99,5 +111,6 @@
   .brand { margin-right: 16px; }
   .nav { display: block; }
   .signin { display: inline-flex; }
+  .repo { display: inline-flex; }
   .mobile { display: none; }
 }

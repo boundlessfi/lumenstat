@@ -13,7 +13,7 @@ import { NormalizeStill } from './figures/Normalize/Still';
 import { OperatorSchematic } from './figures/OperatorSchematic';
 import { VerifyStill, type VerifyData } from './figures/Verify/Still';
 import figureStyles from './figures/figures.module.css';
-import { ExternalIcon } from './icons';
+import { ExternalIcon, GitHubIcon } from './icons';
 import { Button, Card, Chip, CodeBlock, Eyebrow, TwoToneText } from './ui';
 import styles from './Sections.module.css';
 
@@ -70,6 +70,7 @@ function EnrollButton({ copy, event }: { copy: Copy; event: string }) {
 function RepoButton({ label }: { label: string }) {
   return (
     <Button href={site.repoUrl} variant="secondary" event="outbound-github" opens={microcopy.opensGitHub} external>
+      <GitHubIcon />
       {label}
       <ExternalIcon />
     </Button>

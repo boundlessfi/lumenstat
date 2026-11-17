@@ -53,7 +53,7 @@ All in `site.config.ts`. The defaults are the safe choice. Change a value, rebui
 
 | Switch | Default | What it changes |
 | --- | --- | --- |
-| `repoPublic` | `false` | While false, the page has no GitHub link and makes no open-source claim: the hero line reads "Hosted in the EU.", the infrastructure heading and its MIT row change, the open-source FAQ is left out, the "Read the code" buttons become "See how it works", the JSON-LD drops `license` and `sameAs`, and `/.well-known/security.txt` returns 404 |
+| `repoPublic` | `true` | The repository is public, so the header, the hero line, the infrastructure section, the FAQ, the final call to action and the footer link to GitHub. While false, the page has no GitHub link and makes no open-source claim: the hero line reads "Hosted in the EU.", the infrastructure heading and its MIT row change, the open-source FAQ is left out, the "Read the code" buttons become "See how it works", the JSON-LD drops `license` and `sameAs`, and `/.well-known/security.txt` returns 404 |
 | `repoUrl` | the GitHub repo | Target of the GitHub links, once `repoPublic` is true |
 | `docsUrl` | `null` | A URL adds a "Docs" link to the header, menu and footer |
 | `signupMode` | `'open'` | `'open'`: "Enroll your project" and "Programs can run sign-up open or with approval." `'approval'`: "Request access" and "New projects are reviewed before they go live." |

@@ -1,6 +1,6 @@
 import { microcopy, type Copy } from '../content/copy';
 import { site } from '../site.config';
-import { Mark } from './icons';
+import { GitHubIcon, Mark } from './icons';
 import { MobileMenu } from './MobileMenu';
 import { Button } from './ui';
 import styles from './Header.module.css';
@@ -23,6 +23,15 @@ export function Header({ copy }: { copy: Copy }) {
     </>
   );
 
+  const repoLink = (className: string | undefined, visibleLabel: boolean) =>
+    site.repoPublic ? (
+      <a href={site.repoUrl} className={className} target="_blank" rel="noopener" data-umami-event="outbound-github">
+        <GitHubIcon width={18} height={18} />
+        <span className={visibleLabel ? undefined : 'vh'}>{copy.footer.github}</span>
+        <span className="vh"> {microcopy.opensGitHub}</span>
+      </a>
+    ) : null;
+
   return (
     <header id="site-header" className={styles.header}>
       <div className={`container ${styles.bar}`}>
@@ -36,6 +45,7 @@ export function Header({ copy }: { copy: Copy }) {
         </nav>
 
         <div className={styles.actions}>
+          {repoLink(styles.repo, false)}
           <a href={site.signinUrl} className={styles.signin}>
             {copy.signIn}
             <span className="vh"> {microcopy.opensApp}</span>
@@ -47,6 +57,7 @@ export function Header({ copy }: { copy: Copy }) {
             <nav aria-label="Menu">
               <ul>
                 {links}
+                {site.repoPublic ? <li>{repoLink(styles.menuRepo, true)}</li> : null}
                 <li>
                   <a href={site.signinUrl}>
                     {copy.signIn}

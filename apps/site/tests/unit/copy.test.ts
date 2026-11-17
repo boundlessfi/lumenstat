@@ -12,8 +12,8 @@ const everyString = (value: unknown): string[] =>
       : [];
 
 describe('config switches', () => {
-  it('default to the safe choices', () => {
-    expect(site.repoPublic).toBe(false);
+  it('hold the decided values, and the safe choice where nothing is decided', () => {
+    expect(site.repoPublic).toBe(true); // decided: the repository is public
     expect(site.scfAwarded).toBe(false);
     expect(site.docsUrl).toBe('https://docs.lumenstat.com'); // decided: the docs are live
     expect(site.publicStatsUrl).toBeNull();
@@ -64,9 +64,11 @@ describe('config switches', () => {
   });
 
   it('keeps the metadata lengths the spec gives', () => {
-    const copy = getCopy(config());
+    const copy = getCopy(config({ repoPublic: false }));
     expect(copy.meta.title).toHaveLength(55);
     expect(copy.meta.description).toHaveLength(137);
+    // The public-repository description adds "Open source and" and stays under 160.
+    expect(getCopy(config({ repoPublic: true })).meta.description).toHaveLength(153);
   });
 
   it('never uses an em dash or an en dash', () => {
