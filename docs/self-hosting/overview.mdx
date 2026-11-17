@@ -179,7 +179,7 @@ Run `deploy/deploy.sh <ssh host>` again. It repeats the tracker check, copies th
 </Warning>
 
 <Note>
-  **Planned:** serving `t.` and `otlp.` directly from EU servers is part of Milestone 3 for the hosted service. The repository does not include a configuration for it yet.
+  **Planned:** serving `t.` and `otlp.` directly from EU servers is part of Milestone 2 for the hosted service. The repository does not include a configuration for it yet.
 </Note>
 
 To do it on your own instance, point DNS-only records for `t.` and `otlp.` at your server and terminate TLS there, for example with Caddy and Let's Encrypt. That reverse proxy publishes a port, so the "no published ports" property then holds for the dashboard only. Change these at the same time:
@@ -189,7 +189,7 @@ To do it on your own instance, point DNS-only records for `t.` and `otlp.` at yo
 - **Keep `SKIP_LOCATION_HEADERS=1`.** `deploy/compose.yaml` already sets it, so Umami ignores `cf-ipcountry` and looks the country up in its own GeoLite database. Without it, and without Cloudflare in front, a client could send that header and pick its own country.
 - **DNS in OpenTofu.** The module creates proxied CNAMEs for all three hostnames. Change the records for `t.` and `otlp.`.
 
-{/* TODO: no tested DNS-only configuration exists in the repository. Replace this list with the real setup once Milestone 3 ships it. */}
+{/* TODO: no tested DNS-only configuration exists in the repository. Replace this list with the real setup once Milestone 2 ships it. */}
 
 ## Run locally for development
 
@@ -271,5 +271,5 @@ The local stack differs from the server in ways that matter when testing:
 - No backups, monitoring or alerts are set up by these files.
 
 <Note>
-  **Planned:** off-site backups in the EU with a restore drill, alerts and a public status page, and ingest in two locations with failover are part of Milestone 3. See the [roadmap](/project/roadmap).
+  **Planned:** off-site backups in the EU with a restore drill, and alerts with a public status page, are part of Milestone 2. Ingest in two locations with failover is part of Milestone 3. See the [roadmap](/project/roadmap).
 </Note>

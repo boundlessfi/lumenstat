@@ -27,7 +27,7 @@ Event retention: 25 months, then daily totals (*planned*: the retention job ship
 
 ## API traffic
 
-Projects send OpenTelemetry data to our collector with an ingest key. The collector turns spans into counters and latency histograms per route, method and status code, then drops every span, trace and log. Route paths are normalized: account and contract addresses, ids, hashes and tokens become placeholders. API callers' IP addresses, headers and bodies are never stored. Per-minute counters are kept 30 days and rollups 36 months (*planned*: rollups and the retention job ship with Milestone 2).
+Projects send OpenTelemetry data to our collector with an ingest key. The collector turns spans into counters and latency histograms per route, method and status code, then drops every span, trace and log. Route paths are normalized: account and contract addresses, ids, hashes and tokens become placeholders. API callers' IP addresses, headers and bodies are never stored. Per-minute counters are kept 30 days and rollups 36 months (*planned*: rollups and the retention job ship with Milestone 1).
 
 ## Dashboard users
 
@@ -40,7 +40,7 @@ People who sign in to the dashboard (project members and SCF operators) have an 
 
 ## Where data lives
 
-All storage and processing run on servers in the European Union (Germany). Backups stay in the EU (*planned*: off-site backups ship with Milestone 3).
+All storage and processing run on servers in the European Union (Germany). Backups stay in the EU (*planned*: off-site backups ship with Milestone 2).
 
 **Pilot note:** in the current pilot, the tracker (`t.`) and OTLP (`otlp.`) hostnames are served through Cloudflare, so Cloudflare processes visitor IP addresses in transit as a sub-processor. The production design serves those two hostnames directly from our EU servers, so no third-party CDN sees visitors' IPs; only the dashboard stays behind Cloudflare.
 

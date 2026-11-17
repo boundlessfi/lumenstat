@@ -120,7 +120,7 @@ Projects send OpenTelemetry data to the collector with an ingest key. The collec
 The collector buffers data in memory only, on its way to the writer.
 
 <Note>
-**Planned: API rollups and retention.** Hourly and daily rollups, and the retention job that enforces the 30-day and 36-month limits, ship with Milestone 2.
+**Planned: API rollups and retention.** Hourly and daily rollups, and the retention job that enforces the 30-day and 36-month limits, ship with Milestone 1.
 </Note>
 
 ### Dashboard users
@@ -143,14 +143,14 @@ In the current pilot, the tracker host (`t.lumenstat.com`) and the OTLP host (`o
 
 Cloudflare's own country header (`cf-ipcountry`) is ignored: Umami runs with `SKIP_LOCATION_HEADERS=1`, so the country always comes from Lumenstat's lookup on the /24 or /48 network.
 
-The production design serves `t.` and `otlp.` directly from EU servers, so no third-party CDN sees the IP addresses of visitors to project websites. Only the dashboard stays behind Cloudflare. This change is planned for Milestone 3 (see the [roadmap](/project/roadmap)).
+The production design serves `t.` and `otlp.` directly from EU servers, so no third-party CDN sees the IP addresses of visitors to project websites. Only the dashboard stays behind Cloudflare. This change is planned for Milestone 2 (see the [roadmap](/project/roadmap)).
 
 ## Where data lives
 
 All storage and processing run on one server in the European Union (Germany), apart from Cloudflare's processing in transit during the pilot. PostgreSQL holds website events, flagged events, API counters, keys as hashes, and dashboard accounts. Redis holds the daily salts and the network counters, in memory only. The server publishes no ports: it is reached only through a Cloudflare Tunnel.
 
 <Note>
-**Planned: backups.** Off-site backups that stay in the EU ship with Milestone 3.
+**Planned: backups.** Off-site backups that stay in the EU ship with Milestone 2.
 </Note>
 
 ### Sub-processors
