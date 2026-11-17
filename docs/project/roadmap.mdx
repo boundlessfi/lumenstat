@@ -4,13 +4,13 @@ description: "What is live, what is being built, and what comes next, milestone 
 icon: "map"
 ---
 
-Lumenstat is built against the three milestones of its proposal to the Stellar Community Fund RFP *Web and API Analytics for Stellar Ecosystem Projects*. Much of the first milestone was built before applying, so reviewers can test it rather than read about it. The plan below changes if SCF asks for changes, and this page changes with it.
+Lumenstat is built against the three milestones of its SCF Build proposal for the RFP *Web and API Analytics for Stellar Ecosystem Projects*. Each milestone is one tranche of that proposal. Much of the service was built before applying, so reviewers can test it rather than read about it. The plan below changes if SCF asks for changes, and this page changes with it.
 
 Have something you need that is not here? [Suggest it or vote on the board](/project/feedback).
 
-## Milestone 1: web analytics live
+## Built before applying
 
-<Badge color="green">Mostly live</Badge>
+<Badge color="green">Live</Badge>
 
 | Deliverable | Status |
 | --- | --- |
@@ -18,27 +18,38 @@ Have something you need that is not here? [Suggest it or vote on the board](/pro
 | Bot and inflation defense, layers 1 to 4, with flagged traffic stored apart | Live |
 | Versioned, immutable tracker with SRI and ad-block-safe paths | Live, tracker 1.0.0 |
 | Byte-for-byte reproducible tracker build, checked in CI and on deploy | Live |
-| Self-service enrollment with a Stellar link, open or approval mode | Live |
+| Self-service enrollment with a Stellar link, in open, approval or closed mode | Live |
+| API path: collector with spanmetrics, route normalization, writer with p50, p95 and p99, per-project API view | Live |
+| Metrics API with read keys issued from the command line | Live |
 | Project dashboard and operator screens, built with the Stellar Design System | Live |
-| Security policy and private vulnerability reporting | Policy published, reporting channel being enabled |
 | OpenTofu and Ansible for staging and production | In the repository |
-| `@lumenstat/tracker` on npm with provenance | Ready, first publish pending |
-| Public MIT repository | Opening soon |
-| Boundless instrumented in production | In review |
-| Privacy statement reviewed by counsel | Draft published, review pending |
+| Public MIT repository, security policy and a draft privacy statement | Live |
 
-## Milestone 2: API analytics and the global view
+## Milestone 1: production pilot for SCF projects
 
-<Badge color="blue">In progress</Badge>
+<Badge color="blue">Next</Badge>
 
-Parts of the API path already run: the collector with spanmetrics, route normalization, the writer with p50, p95 and p99, and a per-project API view. This milestone finishes it and makes the operator view work at the scale of every SCF project.
-
-- Attribute allowlist at the collector, and ingest keys checked at the edge instead of only in the writer.
+- `@lumenstat/tracker` published to npm with provenance.
+- An attribute allowlist at the collector, and ingest keys checked and rate-limited at the edge instead of only in the writer.
 - Hourly and daily rollups for API metrics, with retention jobs.
-- Operator global dashboard for web and API, with CSV export.
-- Operator API keys, and suspend and remove for projects.
+- Issuing, scoping, expiring and revoking read keys from the operator dashboard.
+- Guides for six web frameworks and four API languages, and a first-event check on the Setup page.
+- Stellar Wallets Kit connects recorded as events, with the wallet type and never the address, in tracker 1.1.0.
+- Suspend, resume and remove a project.
+- Boundless live on web and API analytics in production, and two more SCF-funded projects enrolled.
+- Private vulnerability reporting enabled, and the privacy statement reviewed by counsel.
+
+## Milestone 2: the global view at SCF scale
+
+<Badge color="gray">Planned</Badge>
+
+- Operator global dashboard for web and API, with filters, side-by-side compare and CSV export.
 - An anomaly view for sudden changes in traffic or flagged share.
 - A published load test at ten times the target volume.
+- `t.` and `otlp.` served directly from EU servers, so no CDN sees visitor IP addresses.
+- Alerts and a public status page.
+- Off-site backups in the EU with point-in-time recovery, and a restore drill.
+- A threat model and a monitoring plan.
 - Three SCF projects live on web analytics and one on API analytics.
 
 ## Milestone 3: production and handover ready
@@ -46,18 +57,15 @@ Parts of the API path already run: the collector with spanmetrics, route normali
 <Badge color="gray">Planned</Badge>
 
 - Ingest in two locations with a buffer, and a rehearsed failover.
-- `t.` and `otlp.` served directly from EU servers, so no CDN sees visitor IP addresses.
-- Alerts and a public status page.
-- Off-site backups in the EU, with a restore drill.
 - Self-service data deletion for projects, and the event retention job (25 months, then daily totals).
 - Runbooks for deploys, Umami upgrades, restores, incidents, key rotation and handover.
-- An outside security review, with its fixes.
+- Dependency and container scanning in CI, with fixes for what the threat model finds.
 - A handover dry run by someone outside the team, with the log published.
-- Final statements on data residency, jurisdiction and erasure.
+- Final statements on data residency, jurisdiction and erasure, and operator and project videos.
 
 ## After milestone 3
 
-Lumenstat is meant to outlive its builders. After the third milestone the service runs for twelve months with monthly Umami and dependency updates, a monthly restore test and a published service report. At a point SCF chooses, it moves to a community operator that SCF names: that operator rebuilds the stack from this repository, the data is restored and checked table by table, DNS moves, and every secret is rotated. Tracker URLs do not change, so projects do nothing.
+Lumenstat is meant to outlive its builders. After the third milestone the service runs for twelve months with monthly Umami and dependency updates, a monthly restore test and a published service report. An outside security review of tenant isolation and the tracker runs in that window, and its fixes ship there. At a point SCF chooses, it moves to a community operator that SCF names: that operator rebuilds the stack from this repository, the data is restored and checked table by table, DNS moves, and every secret is rotated. Tracker URLs do not change, so projects do nothing.
 
 ## How releases work
 

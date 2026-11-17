@@ -81,10 +81,8 @@ npm run key:revoke -- <api key id>
 A key created without `--tenant` reads every project. A key with `--tenant` reads only that tenant and gets a 404 for any other. API ingest keys are not issued here: project owners issue their own on **Setup**.
 
 <Note>
-  Issuing and revoking read keys from this page is planned for Milestone 2. Uptime history, counts of rejected traffic and backup status are planned with monitoring.
+  Issuing and revoking read keys from this page is planned for Milestone 1. Uptime history, counts of rejected traffic and backup status are planned with monitoring in Milestone 2.
 </Note>
-
-{/* TODO: name the milestone for uptime history, rejected-traffic counts and backup status. The Keys and health page says "the monitoring milestone"; project/roadmap.mdx puts alerts, a status page and backups in Milestone 3. */}
 
 ## What operators can and cannot see
 
@@ -93,4 +91,4 @@ Operators see every project's aggregate numbers, the flagged-traffic summary for
 ## Limits
 
 - **The operator screens scale with the number of projects.** They call Umami once per project and once per website on each load, so they slow down as enrollment grows. Aggregated queries for the operator view are part of Milestone 2.
-- **No export, anomaly view or project suspension yet.** CSV export, an anomaly view for sudden changes in traffic or flagged share, and suspending and removing projects are planned for Milestone 2. See the [roadmap](/project/roadmap).
+- **No export, anomaly view or project suspension yet.** Suspending and removing projects is planned for Milestone 1. CSV export and an anomaly view for sudden changes in traffic or flagged share are planned for Milestone 2. See the [roadmap](/project/roadmap).

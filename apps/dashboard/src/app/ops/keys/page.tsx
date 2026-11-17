@@ -65,7 +65,7 @@ export default async function KeysPage() {
 npm run key:revoke -- <api key id>`}</pre>
           <Text as="p" size="xs" addlClassName="muted">
             A key without --tenant reads every project. API ingest keys are self-service: project owners issue them on their Setup page.
-            Issuing and revoking read keys from this page is planned for Milestone 2.
+            Issuing and revoking read keys from this page is planned for Milestone 1.
           </Text>
         </div>
       </Card>

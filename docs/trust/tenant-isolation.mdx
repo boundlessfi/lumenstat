@@ -142,7 +142,7 @@ Umami's login page, admin UI and API, and the writer, answer only on the stack's
 ## Limits
 
 - **Operator credentials sit behind two dashboard views.** API numbers and flagged-traffic summaries reach the dashboard through an operator key and the Umami admin account, and are filtered to the viewer's project in the dashboard's server code. Website numbers do not depend on that filter, because Umami checks the viewer's own token. A bug in the filter could expose another project's API numbers or flagged counts.
-- **The collector accepts data before checking the key.** Keyless or wrong-key data is processed in memory by the collector and dropped at the writer. It never lands under a tenant, but it costs collector work. Checking keys at the edge is planned for Milestone 2 (see the [roadmap](/project/roadmap)).
+- **The collector accepts data before checking the key.** Keyless or wrong-key data is processed in memory by the collector and dropped at the writer. It never lands under a tenant, but it costs collector work. Checking keys at the edge is planned for Milestone 1 (see the [roadmap](/project/roadmap)).
 - **An ingest key is a bearer secret.** Whoever holds a project's ingest key can write API metrics into that project. Keep it in your server's secrets, not in client code.
 - **Revocation is slow to bite and partly manual.** The writer caches each ingest key lookup for 60 seconds, so a revoked key keeps working for up to a minute. Read keys are revoked with `npm run key:revoke` in `apps/writer`. Ingest keys have no revoke command or dashboard control yet.
 - **Website writes have no credential.** Anyone can post events for a public website id. Whether they count is decided by the bot checks, with the limits described there.

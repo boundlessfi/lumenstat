@@ -46,7 +46,7 @@ What the collector and writer do with it:
 The collector does not check the key. A request with a missing, unknown or revoked key gets the same success response as a valid one. Its spans are aggregated like any other, and the writer then drops every resulting data point with the reason `unknown_ingest_key`. Nothing is stored and the sender sees no error. Use **Is data arriving?** on Setup to confirm a key works.
 
 <Note>
-  Checking ingest keys at the edge, instead of only in the writer, is planned for Milestone 2. See the [roadmap](/project/roadmap).
+  Checking ingest keys at the edge, instead of only in the writer, is planned for Milestone 1. See the [roadmap](/project/roadmap).
 </Note>
 
 ## Accepted metric series
