@@ -7,7 +7,8 @@ export const site = {
   signinUrl: 'https://app.lumenstat.com/login',
 
   // D2: repo visibility. While false, every GitHub link and every "open source" claim is hidden.
-  repoPublic: false as boolean,
+  // Decided: the repository is public and MIT licensed.
+  repoPublic: true as boolean,
   repoUrl: 'https://github.com/boundlessfi/lumenstat',
 
   // D3: docs site. null hides the Docs links.
