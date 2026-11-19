@@ -9,6 +9,17 @@ body {
   color: var(--sds-clr-gray-12);
 }
 
+/* SDS centers the header in a fixed-width box. Every page with this header has the
+   side menu, so line the header up with it instead: the logo starts where the menu
+   text starts (12px menu padding + 12px link padding), and the right side ends where
+   the page padding ends. */
+.Layout__header .Layout__inset {
+  max-width: none;
+  margin: 0;
+  padding-left: 24px;
+  padding-right: 32px;
+}
+
 .shell {
   display: flex;
   flex-wrap: wrap;
