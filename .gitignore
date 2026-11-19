@@ -14,3 +14,6 @@ examples/test-site/*.html
 
 # npm package build output (copied from packages/tracker/releases at pack time)
 packages/tracker/dist/
+
+# Local port overrides, loaded automatically by docker compose
+docker-compose.override.yml
