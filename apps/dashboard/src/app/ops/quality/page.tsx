@@ -73,7 +73,7 @@ export default async function QualityPage({ searchParams }: Props) {
         <SimpleTable
           id="quality"
           columns={['Project', 'Website', 'Counted page views', 'Flagged events', 'Flagged share', 'Why']}
-          numericFrom={2}
+          numericColumns={[2, 3, 4]}
           rows={rows.map(({ s, good, bad, reasons }) => [
             s.team.name,
             s.domain ?? s.name,

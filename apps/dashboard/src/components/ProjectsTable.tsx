@@ -41,7 +41,7 @@ export function ProjectsTable({ rows, range }: { rows: ProjectRow[]; range: stri
           {`Compare selected (${selected.length})`}
         </Button>
       </div>
-      <div className="data-table" data-num-from={1}>
+      <div className="data-table" data-num="1 2 3 4 5 6">
         <Table
           id="projects"
           breakpoint={900}
