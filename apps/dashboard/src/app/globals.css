@@ -217,9 +217,14 @@ pre.snippet {
   white-space: nowrap;
 }
 
+/* SDS sets word-break: break-word, which lets the browser size columns as if any word
+   can split, so short columns like Project break mid-word next to a long text column.
+   This sizes each column by its longest word and wraps a word only if it can't fit. */
 .data-table table.Table tbody td {
   padding: 20px 16px;
   background: var(--table-panel);
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .data-table table.Table tbody tr:not(:last-child) td { border-bottom: 1px solid var(--table-divider); }
@@ -240,11 +245,19 @@ pre.snippet {
 .data-table table.Table tr > th:last-child:not(:first-child),
 .data-table table.Table tr > td:last-child:not(:first-child):not(.num) { text-align: left; }
 
-/* Numeric columns are right-aligned (.num on the cells); data-num-from lines up their
-   labels. The value is the zero-based index of the first numeric column. */
-.data-table[data-num-from="1"] table.Table thead tr th:nth-child(n + 2),
-.data-table[data-num-from="2"] table.Table thead tr th:nth-child(n + 3),
-.data-table[data-num-from="3"] table.Table thead tr th:nth-child(n + 4) { text-align: right; }
+/* Numeric columns are right-aligned (.num on the cells); data-num lines up their labels.
+   It lists the zero-based indexes of the numeric columns, separated by spaces, so a text
+   column can follow them. */
+.data-table[data-num~="0"] table.Table thead tr th:nth-child(1),
+.data-table[data-num~="1"] table.Table thead tr th:nth-child(2),
+.data-table[data-num~="2"] table.Table thead tr th:nth-child(3),
+.data-table[data-num~="3"] table.Table thead tr th:nth-child(4),
+.data-table[data-num~="4"] table.Table thead tr th:nth-child(5),
+.data-table[data-num~="5"] table.Table thead tr th:nth-child(6),
+.data-table[data-num~="6"] table.Table thead tr th:nth-child(7),
+.data-table[data-num~="7"] table.Table thead tr th:nth-child(8),
+.data-table[data-num~="8"] table.Table thead tr th:nth-child(9),
+.data-table[data-num~="9"] table.Table thead tr th:nth-child(10) { text-align: right; }
 
 .data-table table.Table td a {
   color: var(--sds-clr-gray-12);

@@ -8,6 +8,7 @@ export function SimpleTable({
   columns,
   rows,
   numericFrom = Number.POSITIVE_INFINITY,
+  numericColumns,
   emptyMessage = 'Nothing here yet',
 }: {
   id: string;
@@ -15,10 +16,15 @@ export function SimpleTable({
   rows: string[][];
   /** Columns at or after this index are right-aligned numbers. */
   numericFrom?: number;
+  /** The exact columns that hold right-aligned numbers. Use it when a text column follows them. */
+  numericColumns?: number[];
   emptyMessage?: string;
 }) {
+  const isNumeric = (i: number) => (numericColumns ? numericColumns.includes(i) : i >= numericFrom);
+  const numeric = columns.map((_, i) => i).filter(isNumeric);
+
   return (
-    <div className="data-table" data-num-from={Number.isFinite(numericFrom) ? numericFrom : undefined}>
+    <div className="data-table" data-num={numeric.length > 0 ? numeric.join(' ') : undefined}>
       <Table
         id={id}
         breakpoint={700}
@@ -29,7 +35,7 @@ export function SimpleTable({
         renderItemRow={row => (
           <>
             {row.cells.map((cell: string, i: number) => (
-              <td key={i} className={i >= numericFrom ? 'num' : undefined}>
+              <td key={i} className={isNumeric(i) ? 'num' : undefined}>
                 {cell}
               </td>
             ))}

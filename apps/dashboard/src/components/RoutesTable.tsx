@@ -6,7 +6,7 @@ import type { ApiRoute } from '@/lib/server/writer';
 
 export function RoutesTable({ routes }: { routes: ApiRoute[] }) {
   return (
-    <div className="data-table" data-num-from={2}>
+    <div className="data-table" data-num="2 3 4 5 6 7 8">
       <Table
         id="routes"
         breakpoint={900}
