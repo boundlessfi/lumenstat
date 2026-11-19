@@ -9,6 +9,17 @@ body {
   color: var(--sds-clr-gray-12);
 }
 
+/* SDS centers the header in a fixed-width box. Every page with this header has the
+   side menu, so line the header up with it instead: the logo starts where the menu
+   text starts (12px menu padding + 12px link padding), and the right side ends where
+   the page padding ends. */
+.Layout__header .Layout__inset {
+  max-width: none;
+  margin: 0;
+  padding-left: 24px;
+  padding-right: 32px;
+}
+
 .shell {
   display: flex;
   flex-wrap: wrap;
@@ -154,6 +165,108 @@ pre.snippet {
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .error-text { color: var(--sds-clr-red-11); font-weight: 600; }
+
+/* Data tables, in the Boundless table style: column labels sit on a raised card and the
+   rows sit on an inner panel with hairline dividers. This styles the SDS Table markup
+   (.TableWrapper > table.Table) inside a .data-table wrapper. Below each table's
+   breakpoint SDS keeps a minimum width, scrolls sideways and pins the first column; the
+   first-column rules below repeat SDS's selectors so the pinned cells keep the right
+   background and padding. */
+.data-table {
+  --table-card: var(--sds-clr-gray-03);
+  --table-panel: var(--sds-clr-gray-01);
+  --table-hover: var(--sds-clr-gray-02);
+  --table-divider: var(--sds-clr-gray-04);
+  --table-inset: 32px;
+}
+
+/* The card padding sits outside the scrolling wrapper, so cells scrolled under the
+   pinned first column are clipped at its edge instead of showing in the padding. */
+.data-table .TableContainer {
+  box-sizing: border-box;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--table-card);
+}
+
+.data-table .TableWrapper { border-radius: 8px; }
+.data-table .Pagination { margin: 0; padding: 12px 0 8px; }
+
+.data-table .TableWrapper > p {
+  margin: 0;
+  padding: 16px calc(var(--table-inset) - 4px);
+  color: var(--sds-clr-gray-11);
+}
+
+.data-table table.Table {
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--sds-clr-gray-12);
+  line-height: 1.45;
+}
+
+.data-table table.Table thead th {
+  padding: 12px 16px;
+  vertical-align: middle;
+  background: var(--table-card);
+  color: var(--sds-clr-gray-11);
+  font-size: 12px;
+  font-weight: var(--sds-fw-semi-bold);
+  line-height: 1.45;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.data-table table.Table tbody td {
+  padding: 20px 16px;
+  background: var(--table-panel);
+}
+
+.data-table table.Table tbody tr:not(:last-child) td { border-bottom: 1px solid var(--table-divider); }
+.data-table table.Table tbody tr:hover td { background: var(--table-hover); }
+
+.data-table table.Table tbody tr:first-child td:first-child { border-top-left-radius: 8px; }
+.data-table table.Table tbody tr:first-child td:last-child { border-top-right-radius: 8px; }
+.data-table table.Table tbody tr:last-child td:first-child { border-bottom-left-radius: 8px; }
+.data-table table.Table tbody tr:last-child td:last-child { border-bottom-right-radius: 8px; }
+
+.data-table table.Table tr > th:first-child:not(:last-child),
+.data-table table.Table tr > td:first-child:not(:last-child) { padding-left: var(--table-inset); }
+.data-table table.Table tbody tr > td:first-child:not(:last-child) { background: var(--table-panel); }
+.data-table table.Table tbody tr:hover > td:first-child:not(:last-child) { background: var(--table-hover); }
+
+.data-table table.Table tr > th:last-child:not(:first-child),
+.data-table table.Table tr > td:last-child:not(:first-child) { padding-right: var(--table-inset); }
+.data-table table.Table tr > th:last-child:not(:first-child),
+.data-table table.Table tr > td:last-child:not(:first-child):not(.num) { text-align: left; }
+
+/* Numeric columns are right-aligned (.num on the cells); data-num-from lines up their
+   labels. The value is the zero-based index of the first numeric column. */
+.data-table[data-num-from="1"] table.Table thead tr th:nth-child(n + 2),
+.data-table[data-num-from="2"] table.Table thead tr th:nth-child(n + 3),
+.data-table[data-num-from="3"] table.Table thead tr th:nth-child(n + 4) { text-align: right; }
+
+.data-table table.Table td a {
+  color: var(--sds-clr-gray-12);
+  font-weight: var(--sds-fw-medium);
+  text-decoration: none;
+}
+
+.data-table table.Table td a:hover { text-decoration: underline; }
+
+.table-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+.table-name input[type="checkbox"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--sds-clr-lilac-09);
+}
+
+@media (max-width: 700px) {
+  .data-table { --table-inset: 16px; }
+}
 
 .center-page {
   min-height: 100vh;
