@@ -18,22 +18,24 @@ export function SimpleTable({
   emptyMessage?: string;
 }) {
   return (
-    <Table
-      id={id}
-      breakpoint={700}
-      hideNumberColumn
-      emptyMessage={emptyMessage}
-      columnLabels={columns.map((label, i) => ({ id: `${id}-col-${i}`, label }))}
-      data={rows.map((cells, i) => ({ id: `${id}-row-${i}`, cells }))}
-      renderItemRow={row => (
-        <>
-          {row.cells.map((cell: string, i: number) => (
-            <td key={i} className={i >= numericFrom ? 'num' : undefined}>
-              {cell}
-            </td>
-          ))}
-        </>
-      )}
-    />
+    <div className="data-table" data-num-from={Number.isFinite(numericFrom) ? numericFrom : undefined}>
+      <Table
+        id={id}
+        breakpoint={700}
+        hideNumberColumn
+        emptyMessage={emptyMessage}
+        columnLabels={columns.map((label, i) => ({ id: `${id}-col-${i}`, label }))}
+        data={rows.map((cells, i) => ({ id: `${id}-row-${i}`, cells }))}
+        renderItemRow={row => (
+          <>
+            {row.cells.map((cell: string, i: number) => (
+              <td key={i} className={i >= numericFrom ? 'num' : undefined}>
+                {cell}
+              </td>
+            ))}
+          </>
+        )}
+      />
+    </div>
   );
 }

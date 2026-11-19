@@ -41,45 +41,45 @@ export function ProjectsTable({ rows, range }: { rows: ProjectRow[]; range: stri
           {`Compare selected (${selected.length})`}
         </Button>
       </div>
-      <Table
-        id="projects"
-        breakpoint={900}
-        hideNumberColumn
-        emptyMessage="No projects have enrolled yet"
-        data={rows}
-        columnLabels={[
-          { id: 'select', label: 'Select' },
-          { id: 'name', label: 'Project' },
-          { id: 'websites', label: 'Sites' },
-          { id: 'visitors', label: 'Visitors' },
-          { id: 'pageviews', label: 'Page views' },
-          { id: 'api', label: 'API requests' },
-          { id: '5xx', label: 'API 5xx' },
-          { id: 'p95', label: 'API p95' },
-        ]}
-        renderItemRow={row => (
-          <>
-            <td>
-              <input
-                type="checkbox"
-                aria-label={`Select ${row.name}`}
-                checked={selected.includes(row.id)}
-                onChange={() => toggle(row.id)}
-                style={{ width: 18, height: 18 }}
-              />
-            </td>
-            <td>
-              <Link href={`/p/${row.id}/overview?range=${range}`}>{row.name}</Link>
-            </td>
-            <td className="num">{count(row.websites)}</td>
-            <td className="num">{count(row.visitors)}</td>
-            <td className="num">{count(row.pageviews)}</td>
-            <td className="num">{row.apiRequests === null ? 'not linked' : count(row.apiRequests)}</td>
-            <td className="num">{percent(row.errorRate, 2)}</td>
-            <td className="num">{ms(row.p95Ms)}</td>
-          </>
-        )}
-      />
+      <div className="data-table" data-num-from={1}>
+        <Table
+          id="projects"
+          breakpoint={900}
+          hideNumberColumn
+          emptyMessage="No projects have enrolled yet"
+          data={rows}
+          columnLabels={[
+            { id: 'name', label: 'Project' },
+            { id: 'websites', label: 'Sites' },
+            { id: 'visitors', label: 'Visitors' },
+            { id: 'pageviews', label: 'Page views' },
+            { id: 'api', label: 'API requests' },
+            { id: '5xx', label: 'API 5xx' },
+            { id: 'p95', label: 'API p95' },
+          ]}
+          renderItemRow={row => (
+            <>
+              <td>
+                <div className="table-name">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${row.name} to compare`}
+                    checked={selected.includes(row.id)}
+                    onChange={() => toggle(row.id)}
+                  />
+                  <Link href={`/p/${row.id}/overview?range=${range}`}>{row.name}</Link>
+                </div>
+              </td>
+              <td className="num">{count(row.websites)}</td>
+              <td className="num">{count(row.visitors)}</td>
+              <td className="num">{count(row.pageviews)}</td>
+              <td className="num">{row.apiRequests === null ? 'not linked' : count(row.apiRequests)}</td>
+              <td className="num">{percent(row.errorRate, 2)}</td>
+              <td className="num">{ms(row.p95Ms)}</td>
+            </>
+          )}
+        />
+      </div>
     </div>
   );
 }
